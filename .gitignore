@@ -1,0 +1,7 @@
+# Python 编译缓存
+__pycache__/
+*.pyc
+
+# 本地 SQLite 数据库文件（部署用 MySQL，不要传这些）
+*.db
+*.sqlite3
