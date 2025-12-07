@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 import pymysql
+import os
 
 # ================== 基础配置 ==================
 
@@ -81,11 +82,11 @@ comment_manager = CommentManager()
 
 # ================== MySQL 直连配置（pymysql） ==================
 
-DB_USER = "root"
-DB_PASS = "Hhaazzeell602"
-DB_HOST = "localhost"
-DB_PORT = 3306
-DB_NAME = "myminireddit"
+DB_USER = os.environ.get("DB_USER", "root")
+DB_PASS = os.environ.get("DB_PASS", "Hhaazzeell602")  # 本地开发用
+DB_HOST = os.environ.get("DB_HOST", "localhost")
+DB_PORT = int(os.environ.get("DB_PORT", "3306"))
+DB_NAME = os.environ.get("DB_NAME", "myminireddit")
 
 conn = pymysql.connect(
     host=DB_HOST,
