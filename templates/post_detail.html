@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="utf-8">
+    <title>{{ post.title }} - MyMiniReddit</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-3xl mx-auto py-8">
+    <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+
+    <!-- 帖子内容 -->
+    <article class="mt-4 bg-slate-800/80 rounded-xl p-5">
+        <h1 class="text-2xl font-bold mb-2">{{ post.title }}</h1>
+        <div class="text-xs text-slate-400 mb-4">
+            by {{ post.username }} · {{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}
+        </div>
+        <div class="whitespace-pre-wrap text-sm leading-relaxed">
+            {{ post.content }}
+        </div>
+    </article>
+    <!-- 在线人数 & 正在输入状态 -->
+    <div class="mt-2 text-xs text-slate-400 flex gap-4">
+        <span id="online-count">在线人数：1</span>
+        <span id="typing-status"></span>
+    </div>
+    <!-- 评论列表 -->
+    <section class="mt-6">
+        <h2 class="text-lg font-semibold mb-3">评论</h2>
+        <div id="comment-list" class="space-y-3">
+            {% if comments %}
+                {% for c in comments %}
+                    <div class="bg-slate-800/70 rounded-lg p-3">
+                        <div class="text-xs text-slate-400 mb-1">
+                            {{ c[2] }} · {{ c[1].strftime('%Y-%m-%d %H:%M') if c[1] else '' }}
+                        </div>
+                        <div class="text-sm whitespace-pre-wrap">
+                            {{ c[0] }}
+                        </div>
+                    </div>
+                {% endfor %}
+            {% else %}
+                <div class="text-sm text-slate-500">
+                    还没有评论，快来抢沙发～
+                </div>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- 发表评论 -->
+    <section class="mt-6">
+        {% if username %}
+            <form method="post" action="/comment" class="space-y-3">
+                <input type="hidden" name="post_id" value="{{ post.id }}">
+                <label class="block text-sm text-slate-300 mb-1">发表评论（{{ username }}）</label>
+                <textarea id="comment-input" name="content" rows="4" required
+                        class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>                <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">
+                    提交评论
+                </button>
+            </form>
+        {% else %}
+            <p class="text-sm text-slate-400 mt-2">
+                你还没有登录，<a href="/login" class="text-emerald-400 underline">登录后才能评论</a>。
+            </p>
+        {% endif %}
+    </section>
+</div>
+
+<script>
+    // 当前帖子的 id，由后端渲染
+    const postId = Number("{{ post.id }}");
+    const currentUser = "{{ username or '' }}";  // 当前登录用户（未登录则为空字符串）
+    const commentList = document.getElementById('comment-list');
+    const onlineCountSpan = document.getElementById('online-count');
+    const typingStatusSpan = document.getElementById('typing-status');
+    const commentInput = document.getElementById('comment-input');
+
+    function addCommentToDOM(c) {
+        // 如果是第一次评论，要清掉“还没有评论”的提示
+        if (commentList.children.length === 1 &&
+            commentList.children[0].textContent.includes('还没有评论')) {
+            commentList.innerHTML = '';
+        }
+
+        const div = document.createElement('div');
+        div.className = "bg-slate-800/70 rounded-lg p-3";
+        div.innerHTML = `
+            <div class="text-xs text-slate-400 mb-1">
+                ${c.username} · ${c.created_at}
+            </div>
+            <div class="text-sm whitespace-pre-wrap">
+                ${c.content}
+            </div>
+        `;
+        commentList.appendChild(div);
+    }
+
+    // 建立 WebSocket 连接
+    const wsProtocol = (location.protocol === "https:") ? "wss://" : "ws://";
+    const wsUrl = wsProtocol + location.host + "/ws/comments/" + postId;
+    const ws = new WebSocket(wsUrl);
+
+    ws.onmessage = function (event) {
+        try {
+            const data = JSON.parse(event.data);
+
+            if (data.type === "new_comment") {
+                if (data.username !== currentUser) {
+                    addCommentToDOM(data);
+                }
+
+            } else if (data.type === "online_count") {
+                onlineCountSpan.textContent = "在线人数：" + data.count;
+
+            } else if (data.type === "typing") {
+                if (!data.users || data.users.length === 0) {
+                    typingStatusSpan.textContent = "";
+                } else {
+                    const names = data.users.join("、");
+                    typingStatusSpan.textContent = names + " 正在输入...";
+                }
+            }
+        } catch (e) {
+            console.error("WS message parse error", e, event.data);
+        }
+    };
+
+    ws.onopen = function () {
+        console.log("评论 WebSocket 连接成功:", wsUrl);
+    };
+
+    ws.onclose = function () {
+        console.log("评论 WebSocket 连接关闭");
+    };
+
+    // 监听输入框，发送 typing 状态
+    let typingTimeout = null;
+    if (commentInput) {
+        commentInput.addEventListener('input', () => {
+            // 一旦有输入，就告知“正在输入中”
+            if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: "typing", is_typing: true }));
+            }
+
+            // 停止输入 2 秒后，自动发送“停止输入”
+            if (typingTimeout) {
+                clearTimeout(typingTimeout);
+            }
+            typingTimeout = setTimeout(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({ type: "typing", is_typing: false }));
+                }
+            }, 2000);
+        });
+    }
+</script>
+
+</body>
+</html>

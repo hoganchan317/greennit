@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>聊天室</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white min-h-screen flex flex-col">
+
+    <div id="messages" class="flex-1 overflow-y-auto p-8 space-y-4"></div>
+
+    <div class="p-6 bg-gray-800 border-t border-gray-700">
+        <div class="max-w-4xl mx-auto flex gap-4">
+            <input id="input" placeholder="说点什么就按回车..."
+                   class="flex-1 bg-gray-700 rounded-xl px-6 py-4 text-lg focus:outline-none focus:ring-4 focus:ring-purple-500">
+            <button onclick="send()"
+                    class="px-8 py-4 bg-gradient-to-r from-purple-600 to-pink-600 rounded-xl font-bold hover:scale-105 transition">
+                发送
+            </button>
+        </div>
+    </div>
+
+<script>
+    const params = new URLSearchParams(location.search);
+    const room = params.get('room') || 'general';
+    document.title = room + " 聊天室";
+
+    const ws = new WebSocket(((location.protocol === "https:") ? "wss://" : "ws://") + location.host + "/ws/" + room);
+
+    ws.onmessage = function(e) {
+        const div = document.createElement('div');
+        div.textContent = e.data;
+        div.className = "bg-gray-800/50 rounded-xl px-6 py-3 max-w-lg";
+        document.getElementById('messages').appendChild(div);
+        div.scrollIntoView({ behavior: 'smooth' });
+    };
+
+    function send() {
+        const input = document.getElementById('input');
+        if (input.value.trim()) {
+            ws.send(input.value);
+            input.value = '';
+        }
+    }
+
+    document.getElementById('input').addEventListener('keypress', e => {
+        if (e.key === 'Enter') send();
+    });
+</script>
+</body>
+</html>
