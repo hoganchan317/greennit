@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>板块管理 - MyMiniReddit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-5xl mx-auto py-8">
+  <div class="flex justify-between items-center mb-6">
+    <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+    <div class="text-sm opacity-80">管理员：{{ username }}</div>
+  </div>
+
+  <h1 class="text-2xl font-bold mb-4">板块 / Topic 管理</h1>
+
+  <table class="w-full text-sm bg-slate-800/80 rounded-xl overflow-hidden">
+    <thead class="bg-slate-700/80">
+    <tr>
+      <th class="px-4 py-2 text-left">ID</th>
+      <th class="px-4 py-2 text-left">名称</th>
+      <th class="px-4 py-2 text-left">描述</th>
+      <th class="px-4 py-2 text-left">创建人</th>
+      <th class="px-4 py-2 text-left">状态</th>
+      <th class="px-4 py-2 text-left">操作</th>
+    </tr>
+    </thead>
+    <tbody>
+    {% for t in topics %}
+      <tr class="border-t border-slate-700/60">
+        <td class="px-4 py-2">{{ t[0] }}</td>
+        <td class="px-4 py-2">{{ t[1] }}</td>
+        <td class="px-4 py-2 text-slate-300">{{ t[2] or "" }}</td>
+        <td class="px-4 py-2">{{ t[5] or "（未知）" }}</td>
+        <td class="px-4 py-2">
+          {% if t[3] == 1 %}
+            <span class="text-emerald-400">已通过</span>
+          {% else %}
+            <span class="text-amber-300">待审核</span>
+          {% endif %}
+        </td>
+        <td class="px-4 py-2 flex gap-2">
+          {% if t[3] == 0 %}
+            <form method="post" action="/admin/topic/{{ t[0] }}/approve"
+                  onsubmit="return confirm('通过这个板块？');">
+              <button class="px-3 py-1 bg-emerald-500/80 hover:bg-emerald-500 rounded text-xs">通过</button>
+            </form>
+          {% endif %}
+          <form method="post" action="/admin/topic/{{ t[0] }}/delete"
+                onsubmit="return confirm('删除这个板块？');">
+            <button class="px-3 py-1 bg-red-500/80 hover:bg-red-500 rounded text-xs">删除</button>
+          </form>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+</body>
+</html>

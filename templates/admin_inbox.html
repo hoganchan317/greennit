@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>管理中心 - MyMiniReddit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-4xl mx-auto py-8">
+  <div class="flex justify-between items-center mb-6">
+    <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+    <div class="text-sm opacity-80">管理员：{{ username }}</div>
+  </div>
+
+  <h1 class="text-2xl font-bold mb-6">管理中心</h1>
+
+  <div class="space-y-4">
+    <a href="/admin/topics"
+       class="block bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition">
+      <div class="flex justify-between items-center">
+        <div>
+          <div class="text-lg font-semibold">板块 / Topic 审核</div>
+          <div class="text-sm text-slate-400 mt-1">
+            管理用户提交的新板块申请。
+          </div>
+        </div>
+        <div class="text-right">
+          <div class="text-2xl font-bold text-amber-300">{{ pending_topics }}</div>
+          <div class="text-xs text-slate-400 mt-1">待审核</div>
+        </div>
+      </div>
+    </a>
+
+    <a href="#"
+       class="block bg-slate-800/80 rounded-xl p-4 opacity-60 cursor-not-allowed">
+      <div class="flex justify-between items-center">
+        <div>
+          <div class="text-lg font-semibold">举报管理（即将上线）</div>
+          <div class="text-sm text-slate-400 mt-1">
+            处理用户对帖子和评论的举报。
+          </div>
+        </div>
+        <div class="text-right">
+          <div class="text-2xl font-bold text-slate-400">{{ pending_reports }}</div>
+          <div class="text-xs text-slate-500 mt-1">待处理</div>
+        </div>
+      </div>
+    </a>
+  </div>
+</div>
+</body>
+</html>

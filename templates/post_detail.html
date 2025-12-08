@@ -21,7 +21,10 @@
             {% endif %}
         </div>
         <div class="text-xs text-slate-400 mb-4">
-            by {{ post.username }} · {{ post.created_at if post.created_at else '' }}
+        {% if post.topic_name %}
+            <span class="mr-2 text-emerald-300">[{{ post.topic_name }}]</span>
+        {% endif %}
+        by {{ post.username }} · {{ post.created_at }}
         </div>
         <div class="whitespace-pre-wrap text-sm leading-relaxed">
             {{ post.content }}

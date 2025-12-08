@@ -12,19 +12,38 @@
     <h1 class="text-3xl font-bold mt-4 mb-6">发新帖</h1>
 
     <form method="post" class="space-y-4">
-        <div>
-            <label class="block mb-1 text-sm text-slate-300">标题</label>
-            <input name="title" required
-                   class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
-        </div>
-        <div>
-            <label class="block mb-1 text-sm text-slate-300">内容</label>
-            <textarea name="content" rows="8" required
-                      class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
-        </div>
-        <button class="px-6 py-2 bg-emerald-500 rounded font-semibold text-sm">
-            发布
-        </button>
+    <div>
+        <label class="block mb-1 text-sm text-slate-300">标题</label>
+        <input name="title" required
+            class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+    </div>
+
+    <div>
+        <label class="block mb-1 text-sm text-slate-300">板块 / 分类（aspect）</label>
+        <select name="topic_id"
+                class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600">
+        <option value="">（不选择）</option>
+        {% for t in topics %}
+            <option value="{{ t[0] }}">{{ t[1] }}</option>
+        {% endfor %}
+        </select>
+        <p class="text-xs text-slate-400 mt-1">
+        或者，你可以建议一个新的板块名称（需要管理员审核）：
+        </p>
+        <input name="new_topic_name"
+            placeholder="例如：Python 学习、动画讨论区..."
+            class="w-full mt-1 px-3 py-2 rounded bg-slate-800 border border-slate-600">
+    </div>
+
+    <div>
+        <label class="block mb-1 text-sm text-slate-300">内容</label>
+        <textarea name="content" rows="8" required
+                class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+    </div>
+
+    <button class="px-6 py-2 bg-emerald-500 rounded font-semibold text-sm">
+        发布
+    </button>
     </form>
 </div>
 </body>

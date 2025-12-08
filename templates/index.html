@@ -16,7 +16,12 @@
             {% if username %}
                 <span class="text-sm opacity-80">已登录：{{ username }}</span>
                 {% if is_admin %}
-                <a href="/admin/users" class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
+                <a href="/admin/inbox"
+                    class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
+                    管理中心
+                </a>
+                <a href="/admin/users"
+                    class="px-3 py-1 bg-slate-700 rounded text-sm text-amber-200">
                     用户管理
                 </a>
                 {% endif %}
@@ -40,6 +45,7 @@
             </a>
             <div class="flex items-center gap-2">
                 <span class="text-xs opacity-70">
+                {% if p[5] %}[{{ p[5] }}]{% endif %}
                 by {{ p[4] }} · {{ p[3].strftime('%Y-%m-%d %H:%M') if p[3] else '' }}
                 </span>
                 {% if is_admin %}

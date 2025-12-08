@@ -163,9 +163,10 @@ async def home(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
 
     cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username
+        SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
         FROM posts p
         JOIN users u ON p.user_id = u.id
+        LEFT JOIN topics t ON p.topic_id = t.id
         WHERE p.is_deleted = 0
         ORDER BY p.id DESC
     """)
@@ -275,6 +276,74 @@ async def admin_ban_user(user_id: int, token: str = Cookie(None)):
     conn.commit()
     return RedirectResponse("/admin/users", status_code=302)
 
+@app.get("/admin/topics", response_class=HTMLResponse)
+async def admin_topics(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or not is_admin(username):
+        return RedirectResponse("/", status_code=302)
+
+    # 查出所有 topic，包括未审核的
+    cur.execute("""
+        SELECT t.id, t.name, t.description, t.is_approved, t.created_at, u.username
+        FROM topics t
+        LEFT JOIN users u ON t.created_by = u.id
+        ORDER BY t.created_at DESC
+    """)
+    topics = cur.fetchall()
+
+    return templates.TemplateResponse(
+        "admin_topics.html",
+        {
+            "request": request,
+            "username": username,
+            "topics": topics,
+        },
+    )
+
+@app.post("/admin/topic/{topic_id}/approve")
+async def admin_approve_topic(topic_id: int, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or not is_admin(username):
+        return RedirectResponse("/", status_code=302)
+
+    cur.execute("UPDATE topics SET is_approved = 1 WHERE id = %s", (topic_id,))
+    conn.commit()
+    return RedirectResponse("/admin/topics", status_code=302)
+
+@app.post("/admin/topic/{topic_id}/delete")
+async def admin_delete_topic(topic_id: int, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or not is_admin(username):
+        return RedirectResponse("/", status_code=302)
+
+    # 简单处理：直接删除这个 topic（如果以后想更安全，可以只标记 is_deleted 字段）
+    cur.execute("DELETE FROM topics WHERE id = %s", (topic_id,))
+    conn.commit()
+    return RedirectResponse("/admin/topics", status_code=302)
+
+@app.get("/admin/inbox", response_class=HTMLResponse)
+async def admin_inbox(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or not is_admin(username):
+        return RedirectResponse("/", status_code=302)
+
+    # 查未审核 topic 数量
+    cur.execute("SELECT COUNT(*) FROM topics WHERE is_approved = 0")
+    pending_topics = cur.fetchone()[0] or 0
+
+    # 预留：举报数量（等我们设计 reports 表再加）
+    pending_reports = 0
+
+    return templates.TemplateResponse(
+        "admin_inbox.html",
+        {
+            "request": request,
+            "username": username,
+            "pending_topics": pending_topics,
+            "pending_reports": pending_reports,
+        },
+    )
+
 # ================== 登录 / 注册 ==================
 
 @app.post("/register")
@@ -314,10 +383,29 @@ async def new_post_page(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
     if not username:
         return RedirectResponse("/login", status_code=302)
-    return templates.TemplateResponse("new_post.html", {"request": request, "username": username})
+
+    # 加载已经批准的 topics（is_approved=1）
+    cur.execute("""
+        SELECT id, name
+        FROM topics
+        WHERE is_approved = 1
+        ORDER BY name ASC
+    """)
+    topics = cur.fetchall()
+
+    return templates.TemplateResponse(
+        "new_post.html",
+        {"request": request, "username": username, "topics": topics},
+    )
 
 @app.post("/post/new")
-async def new_post(title: str = Form(), content: str = Form(), token: str = Cookie(None)):
+async def new_post(
+    title: str = Form(),
+    content: str = Form(),
+    topic_id: Optional[int] = Form(None),
+    new_topic_name: str = Form(""),
+    token: str = Cookie(None),
+):
     username = get_username_from_token(token)
     if not username:
         return RedirectResponse("/login", status_code=302)
@@ -327,12 +415,31 @@ async def new_post(title: str = Form(), content: str = Form(), token: str = Cook
         return RedirectResponse("/login", status_code=302)
 
     now = datetime.utcnow()
-    cur.execute(
-        "INSERT INTO posts (user_id, title, content, created_at) VALUES (%s, %s, %s, %s)",
-        (user_id, title, content, now),
-    )
+
+    # 如果用户填写了新 topic 名称，插入到 topics 作为待审核的申请
+    new_topic_name = new_topic_name.strip()
+    if new_topic_name:
+        cur.execute(
+            "INSERT INTO topics (name, description, created_by, is_approved, created_at) VALUES (%s, %s, %s, 0, %s)",
+            (new_topic_name, "", user_id, now),
+        )
+        conn.commit()
+        # 暂时不把这个新 topic_id 用在当前帖子，因为还没审核通过
+
+    # 插入帖子（topic_id 可能为 None）
+    if topic_id:
+        cur.execute(
+            "INSERT INTO posts (user_id, title, content, created_at, topic_id) VALUES (%s, %s, %s, %s, %s)",
+            (user_id, title, content, now, topic_id),
+        )
+    else:
+        cur.execute(
+            "INSERT INTO posts (user_id, title, content, created_at) VALUES (%s, %s, %s, %s)",
+            (user_id, title, content, now),
+        )
     cur.execute("SELECT LAST_INSERT_ID()")
     post_id = cur.fetchone()[0]
+
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
 # ================== 帖子详情 + 评论 ==================
@@ -342,12 +449,14 @@ async def post_detail(post_id: int, request: Request, token: str = Cookie(None))
     username = get_username_from_token(token)
 
     cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, p.user_id
+        SELECT p.id, p.title, p.content, p.created_at, u.username, p.user_id, t.name
         FROM posts p
         JOIN users u ON p.user_id = u.id
+        LEFT JOIN topics t ON p.topic_id = t.id
         WHERE p.id = %s AND p.is_deleted = 0
     """, (post_id,))
     row = cur.fetchone()
+
     if not row:
         return HTMLResponse("帖子不存在。<a href='/'>返回首页</a>", status_code=404)
 
@@ -358,6 +467,7 @@ async def post_detail(post_id: int, request: Request, token: str = Cookie(None))
         "created_at": row[3],
         "username": row[4],
         "user_id": row[5],
+        "topic_name": row[6],
     }
 
     cur.execute("""
