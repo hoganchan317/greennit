@@ -20,29 +20,41 @@
                 <span class="text-sm opacity-80">已登录：{{ username }}</span>
                 {% if is_admin %}
                     <a href="/admin/inbox"
-                       class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
+                        class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
                         管理中心
                     </a>
                     <a href="/admin/users"
-                       class="px-3 py-1 bg-slate-700 rounded text-sm text-amber-200">
+                        class="px-3 py-1 bg-slate-700 rounded text-sm text-amber-200">
                         用户管理
                     </a>
                 {% endif %}
+                <a href="/search"
+                    class="px-5 py-1 bg-slate-800 rounded text-sm">
+                    搜索
+                </a>
+                <a href="/notifications"
+                    class="px-3 py-1 bg-slate-800 rounded text-sm">
+                    通知
+                </a>
+                <a href="/settings"
+                    class="px-3 py-1 bg-slate-800 rounded text-sm">
+                    设置
+                </a>
                 <a href="/post/new"
-                   class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">
+                    class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">
                     发帖
                 </a>
                 <a href="/logout"
-                   class="px-3 py-1 bg-slate-700 rounded text-sm">
+                    class="px-3 py-1 bg-slate-700 rounded text-sm">
                     退出
                 </a>
             {% else %}
                 <a href="/login"
-                   class="px-3 py-1 bg-sky-500 rounded text-sm font-semibold">
+                    class="px-3 py-1 bg-sky-500 rounded text-sm font-semibold">
                     登录
                 </a>
                 <a href="/register"
-                   class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">
+                    class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">
                     注册
                 </a>
             {% endif %}
@@ -82,10 +94,12 @@
     <div>
         <h2 class="text-xl font-bold mb-4">最新帖子</h2>
 
-        <div class="space-y-4">
+        <div id="post-list" class="space-y-4">
             {% if posts %}
                 {% for p in posts %}
-                    <div class="bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition">
+                    <!-- p: (id, title, content, created_at, username, topic_name, likes) -->
+                    <div class="post-card bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition"
+                         data-post-id="{{ p[0] }}">
                         <div class="flex justify-between items-center mb-1">
                             <a href="/post/{{ p[0] }}" class="text-xl font-semibold hover:underline">
                                 {{ p[1] }}
@@ -99,8 +113,8 @@
                                 </span>
                                 {% if is_admin %}
                                     <form method="post"
-                                        action="/admin/post/{{ p[0] }}/delete"
-                                        onsubmit="return confirm('确定要删除这篇帖子吗？');">
+                                          action="/admin/post/{{ p[0] }}/delete"
+                                          onsubmit="return confirm('确定要删除这篇帖子吗？');">
                                         <button class="text-xs text-red-400 border border-red-500/50 px-2 py-1 rounded hover:bg-red-500/20">
                                             删帖
                                         </button>
@@ -108,6 +122,20 @@
                                 {% endif %}
                             </div>
                         </div>
+
+                        <div class="flex justify-between items-center mb-1 text-xs text-slate-400">
+                            <div>
+                                ❤ <span class="like-count">{{ p[6] }}</span>
+                            </div>
+                            {% if username %}
+                                <button class="like-btn text-xs px-2 py-1 rounded border border-rose-400/60 text-rose-300 hover:bg-rose-500/20">
+                                    点赞 / 取消赞
+                                </button>
+                            {% else %}
+                                <span class="text-slate-500">登录后可以点赞</span>
+                            {% endif %}
+                        </div>
+
                         <p class="text-sm opacity-80 line-clamp-2">
                             {{ p[2][:160] }}{% if p[2]|length > 160 %}...{% endif %}
                         </p>
@@ -122,6 +150,106 @@
     </div>
 
 </div>
+
+{% if username %}
+<script>
+  // 绑定点赞按钮
+  function bindLikeButtons() {
+    document.querySelectorAll(".post-card .like-btn").forEach(btn => {
+      if (btn._bound) return;
+      btn._bound = true;
+      btn.addEventListener("click", async () => {
+        const card = btn.closest(".post-card");
+        const postId = card.getAttribute("data-post-id");
+        const countSpan = card.querySelector(".like-count");
+
+        try {
+          const res = await fetch(`/api/post/${postId}/like`, { method: "POST" });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (countSpan) countSpan.textContent = data.likes;
+        } catch (err) {
+          console.error("Like API error", err);
+        }
+      });
+    });
+  }
+
+  bindLikeButtons();
+
+  // 简单实时刷新帖子列表：每 5 秒从 /api/posts 拉一次
+  async function refreshPosts() {
+    try {
+      const res = await fetch("/api/posts");
+      if (!res.ok) {
+        console.error("Failed to load posts", res.status);
+        return;
+      }
+      const data = await res.json(); // data 是帖子数组
+      const list = document.getElementById("post-list");
+      if (!list) return;
+
+      const existing = new Map();
+      list.querySelectorAll(".post-card").forEach(card => {
+        existing.set(card.getAttribute("data-post-id"), card);
+      });
+
+      const newCards = [];
+
+      for (const p of data) {
+        const idStr = String(p.id);
+        let card = existing.get(idStr);
+        if (!card) {
+          card = document.createElement("div");
+          card.className = "post-card bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition";
+          card.setAttribute("data-post-id", idStr);
+          card.innerHTML = `
+            <div class="flex justify-between items-center mb-1">
+              <a href="/post/${p.id}" class="text-xl font-semibold hover:underline">
+                ${p.title}
+              </a>
+              <div class="flex items-center gap-2">
+                <span class="text-xs opacity-70">
+                  ${p.topic_name ? `<span class="text-emerald-300 mr-1">[${p.topic_name}]</span>` : ""}
+                  by ${p.username} · ${p.created_at || ""}
+                </span>
+              </div>
+            </div>
+            <div class="flex justify-between items-center mb-1 text-xs text-slate-400">
+              <div>
+                ❤ <span class="like-count">${p.likes}</span>
+              </div>
+              <button class="like-btn text-xs px-2 py-1 rounded border border-rose-400/60 text-rose-300 hover:bg-rose-500/20">
+                点赞 / 取消赞
+              </button>
+            </div>
+            <p class="text-sm opacity-80 line-clamp-2">
+              ${p.content.length > 160 ? p.content.slice(0, 160) + "..." : p.content}
+            </p>
+          `;
+        } else {
+          const likeSpan = card.querySelector(".like-count");
+          if (likeSpan) likeSpan.textContent = p.likes;
+        }
+        newCards.push(card);
+      }
+
+      // 用新的顺序重建列表（也会自动去掉已删除的帖子）
+      list.innerHTML = "";
+      newCards.forEach(c => list.appendChild(c));
+
+      // 重新绑定点赞按钮
+      bindLikeButtons();
+
+    } catch (err) {
+      console.error("refreshPosts error", err);
+    }
+  }
+
+  // 每 5 秒刷新一次
+  setInterval(refreshPosts, 5000);
+</script>
+{% endif %}
 
 </body>
 </html>

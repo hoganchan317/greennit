@@ -1,65 +1,65 @@
 <!DOCTYPE html>
 <html lang="zh">
 <head>
-  <meta charset="utf-8">
-  <title>举报管理 - MyMiniReddit</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+    <meta charset="utf-8">
+    <title>举报管理 - MyMiniReddit</title>
+    <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
 <div class="max-w-5xl mx-auto py-8">
-  <div class="flex justify-between items-center mb-6">
-    <a href="/admin/inbox" class="text-slate-400 text-sm">&larr; 返回管理中心</a>
-    <div class="text-sm opacity-80">管理员：{{ username }}</div>
-  </div>
+    <div class="flex justify-between items-center mb-6">
+        <a href="/admin/inbox" class="text-slate-400 text-sm">&larr; 返回管理中心</a>
+        <div class="text-sm opacity-80">管理员：{{ username }}</div>
+    </div>
 
-  <h1 class="text-2xl font-bold mb-4">举报管理</h1>
+    <h1 class="text-2xl font-bold mb-4">举报管理</h1>
 
-  <table class="w-full text-sm bg-slate-800/80 rounded-xl overflow-hidden">
-    <thead class="bg-slate-700/80">
-    <tr>
-      <th class="px-4 py-2 text-left">ID</th>
-      <th class="px-4 py-2 text-left">类型</th>
-      <th class="px-4 py-2 text-left">目标</th>
-      <th class="px-4 py-2 text-left">举报人</th>
-      <th class="px-4 py-2 text-left">原因</th>
-      <th class="px-4 py-2 text-left">时间</th>
-      <th class="px-4 py-2 text-left">操作</th>
-    </tr>
-    </thead>
-    <tbody>
-    {% for r in reports %}
-      <tr class="border-t border-slate-700/60">
-        <td class="px-4 py-2">{{ r[0] }}</td>
-        <td class="px-4 py-2">
-          {% if r[1] == 'post' %}帖子{% else %}评论{% endif %}
-        </td>
-        <td class="px-4 py-2">
-          {% if r[1] == 'post' %}
-            <a href="/post/{{ r[2] }}" class="text-sky-400 hover:underline">
-              查看帖子 #{{ r[2] }}
-            </a>
-          {% else %}
-            <!-- 对评论举报，我们跳到帖子页，由你自己在页面里看 -->
-            评论 ID: {{ r[2] }}
-          {% endif %}
-        </td>
-        <td class="px-4 py-2">{{ r[3] }}</td>
-        <td class="px-4 py-2 text-slate-300 whitespace-pre-wrap">{{ r[4] or '' }}</td>
-        <td class="px-4 py-2">
-          {{ r[6].strftime('%Y-%m-%d %H:%M') if r[6] else '' }}
-        </td>
-        <td class="px-4 py-2">
-          <form method="post" action="/admin/report/{{ r[0] }}/handle"
-                onsubmit="return confirm('确定已处理这个举报吗？');">
-            <button class="px-3 py-1 bg-emerald-500/80 hover:bg-emerald-500 rounded text-xs">
-              标记为已处理
-            </button>
-          </form>
-        </td>
-      </tr>
-    {% endfor %}
-    </tbody>
-  </table>
+    <table class="w-full text-sm bg-slate-800/80 rounded-xl overflow-hidden">
+        <thead class="bg-slate-700/80">
+        <tr>
+        <th class="px-4 py-2 text-left">ID</th>
+        <th class="px-4 py-2 text-left">类型</th>
+        <th class="px-4 py-2 text-left">目标</th>
+        <th class="px-4 py-2 text-left">举报人</th>
+        <th class="px-4 py-2 text-left">原因</th>
+        <th class="px-4 py-2 text-left">时间</th>
+        <th class="px-4 py-2 text-left">操作</th>
+        </tr>
+        </thead>
+        <tbody>
+        {% for r in reports %}
+        <tr class="border-t border-slate-700/60">
+            <td class="px-4 py-2">{{ r[0] }}</td>
+            <td class="px-4 py-2">
+            {% if r[1] == 'post' %}帖子{% else %}评论{% endif %}
+            </td>
+            <td class="px-4 py-2">
+            {% if r[1] == 'post' %}
+                <a href="/post/{{ r[2] }}" class="text-sky-400 hover:underline">
+                查看帖子 #{{ r[2] }}
+                </a>
+            {% else %}
+                <!-- 对评论举报，我们跳到帖子页，由你自己在页面里看 -->
+                评论 ID: {{ r[2] }}
+            {% endif %}
+            </td>
+            <td class="px-4 py-2">{{ r[3] }}</td>
+            <td class="px-4 py-2 text-slate-300 whitespace-pre-wrap">{{ r[4] or '' }}</td>
+            <td class="px-4 py-2">
+            {{ r[6].strftime('%Y-%m-%d %H:%M') if r[6] else '' }}
+            </td>
+            <td class="px-4 py-2">
+            <form method="post" action="/admin/report/{{ r[0] }}/handle"
+                    onsubmit="return confirm('确定已处理这个举报吗？');">
+                <button class="px-3 py-1 bg-emerald-500/80 hover:bg-emerald-500 rounded text-xs">
+                标记为已处理
+                </button>
+            </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
 </div>
 </body>
 </html>

@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>设置 - MyMiniReddit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-3xl mx-auto py-8">
+
+  <!-- 顶部导航 -->
+  <div class="flex justify-between items-center mb-6">
+    <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+    <span class="text-sm opacity-80">当前用户：{{ username }}</span>
+  </div>
+
+  <h1 class="text-2xl font-bold mb-6">账户设置</h1>
+
+  <!-- 基本信息 -->
+  <section class="mb-8">
+    <h2 class="text-lg font-semibold mb-3">基本信息</h2>
+    <div class="bg-slate-800/80 rounded-xl p-4 space-y-2 text-sm">
+      <p><span class="text-slate-400">用户ID：</span>{{ user_id }}</p>
+      <p>
+        <span class="text-slate-400">权限：</span>
+        {% if is_admin %}
+          <span class="text-amber-300">管理员</span>
+        {% else %}
+          普通用户
+        {% endif %}
+      </p>
+      <p>
+        <span class="text-slate-400">状态：</span>
+        {% if is_banned %}
+          <span class="text-red-400">已被封禁（仅供调试显示）</span>
+        {% else %}
+          <span class="text-emerald-400">正常</span>
+        {% endif %}
+      </p>
+      <p class="mt-2">
+        <a href="/user/{{ username }}" class="text-sky-400 hover:underline">
+          查看我的主页 →
+        </a>
+      </p>
+      <p>
+        <a href="/notifications" class="text-sky-400 hover:underline">
+          查看我的通知 →
+        </a>
+      </p>
+    </div>
+  </section>
+
+  <!-- 我的内容 -->
+  <section class="mb-8">
+    <h2 class="text-lg font-semibold mb-3">我的内容</h2>
+    <div class="bg-slate-800/60 rounded-xl p-4 text-sm text-slate-400 space-y-2">
+      <p>你可以在「我的主页」中查看自己的所有帖子：</p>
+      <p>
+        <a href="/user/{{ username }}" class="text-sky-400 hover:underline">
+          打开 {{ username }} 的主页 →
+        </a>
+      </p>
+      <p class="mt-2 text-xs text-slate-500">
+        以后可以在这里继续加「我的评论列表」「我点赞的帖子」等功能。
+      </p>
+    </div>
+  </section>
+
+  <!-- 修改密码 -->
+  <section class="mb-8">
+    <h2 class="text-lg font-semibold mb-3">修改密码</h2>
+    <form method="post" action="/settings/password"
+          class="bg-slate-800/80 rounded-xl p-4 space-y-3 text-sm">
+      <div>
+        <label class="block mb-1 text-slate-300">旧密码</label>
+        <input type="password" name="old_password" required
+               class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block mb-1 text-slate-300">新密码</label>
+        <input type="password" name="new_password" required minlength="6"
+               class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <div>
+        <label class="block mb-1 text-slate-300">重复新密码</label>
+        <input type="password" name="new_password2" required
+               class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      </div>
+      <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">
+        保存新密码
+      </button>
+    </form>
+  </section>
+
+  <!-- 危险操作（保留占位） -->
+  <section>
+    <h2 class="text-lg font-semibold mb-3">危险操作（以后可以加）</h2>
+    <div class="bg-slate-800/60 rounded-xl p-4 text-sm text-slate-400 space-y-2">
+      <p>将来你可以在这里加「删除账号」或「清空数据」等功能。</p>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

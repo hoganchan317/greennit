@@ -20,14 +20,21 @@
         {% if username %}
             <span class="text-sm opacity-80">已登录：{{ username }}</span>
             {% if is_admin %}
-            <a href="/admin/inbox" class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
-                管理中心
-            </a>
+                <a href="/admin/inbox"
+                class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">
+                    管理中心
+                </a>
+                <a href="/admin/users"
+                class="px-3 py-1 bg-slate-700 rounded text-sm text-amber-200">
+                    用户管理
+                </a>
             {% endif %}
             <a href="/post/new" class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">
-            发帖
+                发帖
             </a>
-            <a href="/logout" class="px-3 py-1 bg-slate-700 rounded text-sm">退出</a>
+            <a href="/logout" class="px-3 py-1 bg-slate-700 rounded text-sm">
+                退出
+            </a>
         {% else %}
             <a href="/login" class="px-3 py-1 bg-sky-500 rounded text-sm font-semibold">登录</a>
             <a href="/register" class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">注册</a>

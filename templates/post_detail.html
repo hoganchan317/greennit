@@ -21,22 +21,37 @@
             {% endif %}
         </div>
 
-        <!-- 帖子信息 + 举报帖子按钮 -->
+        <!-- 帖子信息 + 点赞按钮 + 举报按钮 -->
         <div class="flex justify-between items-center mb-4">
             <div class="text-xs text-slate-400">
                 {% if post.topic_name %}
                     <span class="mr-2 text-emerald-300">[{{ post.topic_name }}]</span>
                 {% endif %}
                 by {{ post.username }} · {{ post.created_at }}
+                <span class="ml-2 text-emerald-300 text-xs">
+                    ❤ {{ likes_count }}
+                </span>
             </div>
-            {% if username %}
-                <form method="post" action="/report/post/{{ post.id }}"
-                      onsubmit="return confirm('确定要举报这个帖子吗？');">
-                    <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded hover:bg-amber-500/20">
-                        举报帖子
-                    </button>
-                </form>
-            {% endif %}
+            <div class="flex items-center gap-2">
+                {% if username %}
+                    <form method="post" action="/post/{{ post.id }}/like">
+                        <button class="text-xs px-2 py-1 rounded border
+                                    {% if user_liked %}
+                                        bg-rose-500/80 border-rose-400 hover:bg-rose-500
+                                    {% else %}
+                                        text-rose-300 border-rose-400/60 hover:bg-rose-500/20
+                                    {% endif %}">
+                            {% if user_liked %}取消赞{% else %}点赞{% endif %}
+                        </button>
+                    </form>
+                    <form method="post" action="/report/post/{{ post.id }}"
+                        onsubmit="return confirm('确定要举报这个帖子吗？');">
+                        <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded hover:bg-amber-500/20">
+                            举报帖子
+                        </button>
+                    </form>
+                {% endif %}
+            </div>
         </div>
 
         <div class="whitespace-pre-wrap text-sm leading-relaxed">
