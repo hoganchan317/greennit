@@ -76,6 +76,33 @@
         </div>
     {% endif %}
     </div>
+    {% if total_pages and total_pages > 1 %}
+    <div class="mt-6 flex justify-center items-center gap-4 text-sm text-slate-300">
+        {% if has_prev %}
+        <a href="/topic/{{ topic[0] }}?page={{ page - 1 }}"
+            class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">
+            上一页
+        </a>
+        {% else %}
+        <span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500 cursor-not-allowed">
+            上一页
+        </span>
+        {% endif %}
+
+        <span>第 {{ page }} / {{ total_pages }} 页</span>
+
+        {% if has_next %}
+        <a href="/topic/{{ topic[0] }}?page={{ page + 1 }}"
+            class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">
+            下一页
+        </a>
+        {% else %}
+        <span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500 cursor-not-allowed">
+            下一页
+        </span>
+        {% endif %}
+    </div>
+    {% endif %}
 
 </div>
 </body>

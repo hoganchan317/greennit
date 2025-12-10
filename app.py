@@ -293,11 +293,18 @@ def get_unread_notifications_count(user_id: int) -> int:
 
 
 @app.get("/", response_class=HTMLResponse)
-async def home(request: Request, token: str = Cookie(None)):
+async def home(
+    request: Request,
+    token: str = Cookie(None),
+    page: int = Query(1, ge=1),
+):
     username = get_username_from_token(token)
+    PAGE_SIZE = 10
+    offset = (page - 1) * PAGE_SIZE
 
     with get_db_conn() as conn:
         cur = conn.cursor()
+
         # topics
         cur.execute("""
             SELECT id, name
@@ -307,7 +314,11 @@ async def home(request: Request, token: str = Cookie(None)):
         """)
         topics = cur.fetchall()
 
-        # posts
+        # 统计总帖子数（未删除）
+        cur.execute("SELECT COUNT(*) FROM posts WHERE is_deleted = 0")
+        total_posts = cur.fetchone()[0] or 0
+
+        # 分页查询帖子
         cur.execute("""
             SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
             FROM posts p
@@ -315,7 +326,8 @@ async def home(request: Request, token: str = Cookie(None)):
             LEFT JOIN topics t ON p.topic_id = t.id
             WHERE p.is_deleted = 0
             ORDER BY p.id DESC
-        """)
+            LIMIT %s OFFSET %s
+        """, (PAGE_SIZE, offset))
         raw_posts = cur.fetchall()
 
     # 组装带点赞数的 posts：[(id, title, content, created_at, username, topic_name, likes), ...]
@@ -327,6 +339,11 @@ async def home(request: Request, token: str = Cookie(None)):
 
     admin_flag = is_admin(username) if username else False
 
+    # 计算分页信息
+    total_pages = (total_posts + PAGE_SIZE - 1) // PAGE_SIZE
+    has_prev = page > 1
+    has_next = page < total_pages if total_pages > 0 else False
+
     return templates.TemplateResponse(
         "index.html",
         {
@@ -335,6 +352,10 @@ async def home(request: Request, token: str = Cookie(None)):
             "posts": posts,
             "topics": topics,
             "is_admin": admin_flag,
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": has_prev,
+            "has_next": has_next,
         },
     )
 
@@ -1176,8 +1197,15 @@ async def new_topic(name: str = Form(), description: str = Form(""), token: str 
 
 
 @app.get("/topic/{topic_id}", response_class=HTMLResponse)
-async def topic_page(topic_id: int, request: Request, token: str = Cookie(None)):
+async def topic_page(
+    topic_id: int,
+    request: Request,
+    token: str = Cookie(None),
+    page: int = Query(1, ge=1),
+):
     username = get_username_from_token(token)
+    PAGE_SIZE = 10
+    offset = (page - 1) * PAGE_SIZE
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1188,17 +1216,30 @@ async def topic_page(topic_id: int, request: Request, token: str = Cookie(None))
         if not topic:
             return HTMLResponse("板块不存在或未通过审核。<a href='/'>返回首页</a>", status_code=404)
 
-        # 查属于这个 topic 的帖子
+        # 统计该板块下帖子总数
+        cur.execute("""
+            SELECT COUNT(*)
+            FROM posts
+            WHERE is_deleted = 0 AND topic_id = %s
+        """, (topic_id,))
+        total_posts = cur.fetchone()[0] or 0
+
+        # 查属于这个 topic 的帖子（分页）
         cur.execute("""
             SELECT p.id, p.title, p.content, p.created_at, u.username
             FROM posts p
             JOIN users u ON p.user_id = u.id
             WHERE p.is_deleted = 0 AND p.topic_id = %s
             ORDER BY p.id DESC
-        """, (topic_id,))
+            LIMIT %s OFFSET %s
+        """, (topic_id, PAGE_SIZE, offset))
         posts = cur.fetchall()
 
     admin_flag = is_admin(username) if username else False
+
+    total_pages = (total_posts + PAGE_SIZE - 1) // PAGE_SIZE
+    has_prev = page > 1
+    has_next = page < total_pages if total_pages > 0 else False
 
     return templates.TemplateResponse(
         "topic_posts.html",
@@ -1208,6 +1249,10 @@ async def topic_page(topic_id: int, request: Request, token: str = Cookie(None))
             "is_admin": admin_flag,
             "topic": topic,   # (id, name)
             "posts": posts,
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": has_prev,
+            "has_next": has_next,
         },
     )
 
