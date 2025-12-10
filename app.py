@@ -79,20 +79,24 @@ DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("DB_PORT", "3306"))
 DB_NAME = os.environ.get("DB_NAME", "myminireddit")
 
-conn = pymysql.connect(
-    host=DB_HOST,
-    port=DB_PORT,
-    user=DB_USER,
-    password=DB_PASS,
-    database=DB_NAME,
-    charset="utf8mb4",
-    autocommit=True,
-)
-cur = conn.cursor()
+def get_db_conn():
+    return pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASS,
+        database=DB_NAME,
+        charset="utf8mb4",
+        autocommit=True,
+    )
 
 # ================== 建表：users, posts, comments, topics, reports, post_likes, notifications ==================
 
-cur.execute("""
+
+_schema_conn = get_db_conn()
+_schema_cur = _schema_conn.cursor()
+
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INT PRIMARY KEY AUTO_INCREMENT,
     username VARCHAR(50) UNIQUE,
@@ -102,7 +106,7 @@ CREATE TABLE IF NOT EXISTS users (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS posts (
     id INT PRIMARY KEY AUTO_INCREMENT,
     user_id INT,
@@ -115,7 +119,7 @@ CREATE TABLE IF NOT EXISTS posts (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS comments (
     id INT PRIMARY KEY AUTO_INCREMENT,
     post_id INT,
@@ -128,7 +132,7 @@ CREATE TABLE IF NOT EXISTS comments (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS topics (
     id INT PRIMARY KEY AUTO_INCREMENT,
     name VARCHAR(100) UNIQUE,
@@ -140,7 +144,7 @@ CREATE TABLE IF NOT EXISTS topics (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS reports (
     id INT PRIMARY KEY AUTO_INCREMENT,
     type ENUM('post', 'comment') NOT NULL,
@@ -153,7 +157,7 @@ CREATE TABLE IF NOT EXISTS reports (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS post_likes (
     post_id INT NOT NULL,
     user_id INT NOT NULL,
@@ -164,14 +168,14 @@ CREATE TABLE IF NOT EXISTS post_likes (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-cur.execute("""
+_schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS notifications (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT NOT NULL,              -- 通知接收者
-    type VARCHAR(50) NOT NULL,         -- 通知类型，如 new_comment_on_post / like_on_post
+    user_id INT NOT NULL,
+    type VARCHAR(50) NOT NULL,
     related_post_id INT NULL,
     related_comment_id INT NULL,
-    from_user_id INT NULL,             -- 触发者
+    from_user_id INT NULL,
     message TEXT NOT NULL,
     is_read TINYINT(1) NOT NULL DEFAULT 0,
     created_at DATETIME NOT NULL,
@@ -182,7 +186,10 @@ CREATE TABLE IF NOT EXISTS notifications (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-conn.commit()
+_schema_conn.commit()
+_schema_cur.close()
+_schema_conn.close()
+
 
 # ================== 工具函数：JWT & 用户 ==================
 
@@ -206,32 +213,46 @@ def get_username_from_token(token: Optional[str]) -> Optional[str]:
 
 
 def get_user_id(username: str) -> Optional[int]:
-    cur.execute("SELECT id FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
     return row[0] if row else None
 
 
 def get_post_likes_count(post_id: int) -> int:
-    cur.execute("SELECT COUNT(*) FROM post_likes WHERE post_id = %s", (post_id,))
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM post_likes WHERE post_id = %s", (post_id,))
+        row = cur.fetchone()
     return row[0] if row else 0
 
 
 def user_liked_post(user_id: int, post_id: int) -> bool:
-    cur.execute("SELECT 1 FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT 1 FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
+        row = cur.fetchone()
     return bool(row)
 
 
 def is_admin(username: str) -> bool:
-    cur.execute("SELECT is_admin FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
+    if not username:
+        return False
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT is_admin FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
     return bool(row and row[0] == 1)
 
 
 def is_banned(username: str) -> bool:
-    cur.execute("SELECT is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
+    if not username:
+        return False
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
     return bool(row and row[0] == 1)
 
 
@@ -244,23 +265,27 @@ def create_notification(
     from_user_id: Optional[int] = None,
 ):
     now = datetime.utcnow()
-    cur.execute(
-        """
-        INSERT INTO notifications
-        (user_id, type, message, related_post_id, related_comment_id, from_user_id, is_read, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
-        """,
-        (user_id, type_, message, related_post_id, related_comment_id, from_user_id, now),
-    )
-    conn.commit()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            """
+            INSERT INTO notifications
+            (user_id, type, message, related_post_id, related_comment_id, from_user_id, is_read, created_at)
+            VALUES (%s, %s, %s, %s, %s, %s, 0, %s)
+            """,
+            (user_id, type_, message, related_post_id, related_comment_id, from_user_id, now),
+        )
+        conn.commit()
 
 
 def get_unread_notifications_count(user_id: int) -> int:
-    cur.execute(
-        "SELECT COUNT(*) FROM notifications WHERE user_id = %s AND is_read = 0",
-        (user_id,),
-    )
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT COUNT(*) FROM notifications WHERE user_id = %s AND is_read = 0",
+            (user_id,),
+        )
+        row = cur.fetchone()
     return row[0] if row else 0
 
 
@@ -271,25 +296,27 @@ def get_unread_notifications_count(user_id: int) -> int:
 async def home(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
 
-    # topics
-    cur.execute("""
-        SELECT id, name
-        FROM topics
-        WHERE is_approved = 1
-        ORDER BY name ASC
-    """)
-    topics = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        # topics
+        cur.execute("""
+            SELECT id, name
+            FROM topics
+            WHERE is_approved = 1
+            ORDER BY name ASC
+        """)
+        topics = cur.fetchall()
 
-    # posts
-    cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
-        FROM posts p
-        JOIN users u ON p.user_id = u.id
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE p.is_deleted = 0
-        ORDER BY p.id DESC
-    """)
-    raw_posts = cur.fetchall()
+        # posts
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE p.is_deleted = 0
+            ORDER BY p.id DESC
+        """)
+        raw_posts = cur.fetchall()
 
     # 组装带点赞数的 posts：[(id, title, content, created_at, username, topic_name, likes), ...]
     posts = []
@@ -314,16 +341,17 @@ async def home(request: Request, token: str = Cookie(None)):
 
 @app.get("/api/posts")
 async def api_posts():
-    # 查询当前未删除的帖子及 topic 名称和点赞数
-    cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
-        FROM posts p
-        JOIN users u ON p.user_id = u.id
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE p.is_deleted = 0
-        ORDER BY p.id DESC
-    """)
-    rows = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE p.is_deleted = 0
+            ORDER BY p.id DESC
+        """)
+        rows = cur.fetchall()
 
     posts = []
     for row in rows:
@@ -354,21 +382,24 @@ async def search_page(
     results = []
     if keyword:
         like = f"%{keyword}%"
-        cur.execute("""
-            SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
-            FROM posts p
-            JOIN users u ON p.user_id = u.id
-            LEFT JOIN topics t ON p.topic_id = t.id
-            WHERE p.is_deleted = 0
-              AND (
-                    p.title LIKE %s
-                 OR p.content LIKE %s
-                 OR u.username LIKE %s
-                 OR (t.name IS NOT NULL AND t.name LIKE %s)
-              )
-            ORDER BY p.id DESC
-        """, (like, like, like, like))
-        rows = cur.fetchall()
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
+                FROM posts p
+                JOIN users u ON p.user_id = u.id
+                LEFT JOIN topics t ON p.topic_id = t.id
+                WHERE p.is_deleted = 0
+                  AND (
+                        p.title LIKE %s
+                     OR p.content LIKE %s
+                     OR u.username LIKE %s
+                     OR (t.name IS NOT NULL AND t.name LIKE %s)
+                  )
+                ORDER BY p.id DESC
+            """, (like, like, like, like))
+            rows = cur.fetchall()
+
         for row in rows:
             post_id = row[0]
             likes = get_post_likes_count(post_id)
@@ -419,13 +450,15 @@ async def settings_page(request: Request, token: str = Cookie(None)):
     if not username:
         return RedirectResponse("/login", status_code=302)
 
-    # 查一下当前用户信息（这里先只要 is_admin / is_banned）
-    cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
-    if not row:
-        return RedirectResponse("/login", status_code=302)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        # 查一下当前用户信息（这里先只要 is_admin / is_banned）
+        cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return RedirectResponse("/login", status_code=302)
 
-    user_id, user_is_admin, user_is_banned = row
+        user_id, user_is_admin, user_is_banned = row
 
     return templates.TemplateResponse(
         "settings.html",
@@ -449,30 +482,33 @@ async def change_password(
     username = get_username_from_token(token)
     if not username:
         return RedirectResponse("/login", status_code=302)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    # 取出当前用户的 hash 密码
-    cur.execute("SELECT password FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
-    if not row:
-        return RedirectResponse("/login", status_code=302)
+        # 取出当前用户的 hash 密码
+        cur.execute("SELECT password FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return RedirectResponse("/login", status_code=302)
 
-    hashed = row[0]
+        hashed = row[0]
 
-    # 验证旧密码
-    if not pwd_context.verify(old_password, hashed):
-        return HTMLResponse("旧密码错误。<a href='/settings'>返回设置</a>", status_code=400)
+        # 验证旧密码
+        if not pwd_context.verify(old_password, hashed):
+            return HTMLResponse("旧密码错误。<a href='/settings'>返回设置</a>", status_code=400)
 
-    # 检查新密码一致
-    if new_password != new_password2:
-        return HTMLResponse("两次输入的新密码不一致。<a href='/settings'>返回设置</a>", status_code=400)
+        # 检查新密码一致
+        if new_password != new_password2:
+            return HTMLResponse("两次输入的新密码不一致。<a href='/settings'>返回设置</a>", status_code=400)
 
-    if len(new_password) < 6:
-        return HTMLResponse("新密码太短，至少 6 位。<a href='/settings'>返回设置</a>", status_code=400)
+        if len(new_password) < 6:
+            return HTMLResponse("新密码太短，至少 6 位。<a href='/settings'>返回设置</a>", status_code=400)
 
-    # 更新密码
-    new_hashed = pwd_context.hash(new_password)
-    cur.execute("UPDATE users SET password = %s WHERE username = %s", (new_hashed, username))
-    conn.commit()
+        # 更新密码
+        new_hashed = pwd_context.hash(new_password)
+        cur.execute("UPDATE users SET password = %s WHERE username = %s", (new_hashed, username))
+        conn.commit()
 
     return HTMLResponse("密码修改成功，下次请使用新密码登录。<a href='/'>返回首页</a>")
 
@@ -480,24 +516,26 @@ async def change_password(
 @app.get("/user/{username}", response_class=HTMLResponse)
 async def user_profile(username: str, request: Request, token: str = Cookie(None)):
     current_username = get_username_from_token(token)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    # 查这个用户是否存在
-    cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
+        # 查这个用户是否存在
+        cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
 
-    user_id, user_is_admin, user_is_banned = row
+        user_id, user_is_admin, user_is_banned = row
 
-    # 查 TA 发的帖子
-    cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, t.name
-        FROM posts p
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE p.user_id = %s AND p.is_deleted = 0
-        ORDER BY p.id DESC
-    """, (user_id,))
-    posts = cur.fetchall()
+        # 查 TA 发的帖子
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, t.name
+            FROM posts p
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE p.user_id = %s AND p.is_deleted = 0
+            ORDER BY p.id DESC
+        """, (user_id,))
+        posts = cur.fetchall()
 
     # 计算每个帖子的点赞数
     posts_with_likes = []
@@ -533,44 +571,46 @@ async def user_profile(username: str, request: Request, token: str = Cookie(None
 @app.get("/user/{username}/comments", response_class=HTMLResponse)
 async def user_comments(username: str, request: Request, token: str = Cookie(None)):
     current_username = get_username_from_token(token)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    # 查这个用户是否存在
-    cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
+        # 查这个用户是否存在
+        cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
 
-    user_id, user_is_admin, user_is_banned = row
+        user_id, user_is_admin, user_is_banned = row
 
-    # 查这个用户的评论（帖子未删、评论未删）
-    cur.execute("""
-        SELECT
-            c.id,              -- 0 评论ID
-            c.content,         -- 1 评论内容
-            c.created_at,      -- 2 评论时间
-            p.id AS post_id,   -- 3 所属帖子ID
-            p.title AS post_title,  -- 4 帖子标题
-            t.id AS topic_id,       -- 5 板块ID（可能为 NULL）
-            t.name AS topic_name    -- 6 板块名称（可能为 NULL）
-        FROM comments c
-        JOIN posts p ON c.post_id = p.id
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE c.user_id = %s
-          AND c.is_deleted = 0
-          AND p.is_deleted = 0
-        ORDER BY c.created_at DESC
-        LIMIT 100
-    """, (user_id,))
-    comments = cur.fetchall()
+        # 查这个用户的评论（帖子未删、评论未删）
+        cur.execute("""
+            SELECT
+                c.id,              -- 0 评论ID
+                c.content,         -- 1 评论内容
+                c.created_at,      -- 2 评论时间
+                p.id AS post_id,   -- 3 所属帖子ID
+                p.title AS post_title,  -- 4 帖子标题
+                t.id AS topic_id,       -- 5 板块ID（可能为 NULL）
+                t.name AS topic_name    -- 6 板块名称（可能为 NULL）
+            FROM comments c
+            JOIN posts p ON c.post_id = p.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE c.user_id = %s
+            AND c.is_deleted = 0
+            AND p.is_deleted = 0
+            ORDER BY c.created_at DESC
+            LIMIT 100
+        """, (user_id,))
+        comments = cur.fetchall()
 
-    current_is_admin = is_admin(current_username) if current_username else False
+        current_is_admin = is_admin(current_username) if current_username else False
 
-    # 未读通知数（用于导航）
-    unread_count = 0
-    if current_username:
-        cu_id = get_user_id(current_username)
-        if cu_id:
-            unread_count = get_unread_notifications_count(cu_id)
+        # 未读通知数（用于导航）
+        unread_count = 0
+        if current_username:
+            cu_id = get_user_id(current_username)
+            if cu_id:
+                unread_count = get_unread_notifications_count(cu_id)
 
     return templates.TemplateResponse(
         "user_comments.html",
@@ -599,35 +639,37 @@ async def my_comments_redirect(token: str = Cookie(None)):
 @app.get("/user/{username}/likes", response_class=HTMLResponse)
 async def user_likes(username: str, request: Request, token: str = Cookie(None)):
     current_username = get_username_from_token(token)
+    with get_db_conn() as conn: 
+        cur = conn.cursor()
 
-    # 查这个用户是否存在
-    cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
+        # 查这个用户是否存在
+        cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("用户不存在。<a href='/'>返回首页</a>", status_code=404)
 
-    user_id, user_is_admin, user_is_banned = row
+        user_id, user_is_admin, user_is_banned = row
 
-    # 查这个用户点赞过的帖子（只显示未删除帖子）
-    cur.execute("""
-        SELECT
-            p.id AS post_id,          -- 0
-            p.title,                  -- 1
-            p.created_at,             -- 2
-            u.username AS author,     -- 3
-            t.id AS topic_id,         -- 4
-            t.name AS topic_name,     -- 5
-            pl.created_at AS liked_at -- 6 点赞时间
-        FROM post_likes pl
-        JOIN posts p ON pl.post_id = p.id
-        JOIN users u ON p.user_id = u.id
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE pl.user_id = %s
-          AND p.is_deleted = 0
-        ORDER BY pl.created_at DESC
-        LIMIT 100
-    """, (user_id,))
-    likes = cur.fetchall()
+        # 查这个用户点赞过的帖子（只显示未删除帖子）
+        cur.execute("""
+            SELECT
+                p.id AS post_id,          -- 0
+                p.title,                  -- 1
+                p.created_at,             -- 2
+                u.username AS author,     -- 3
+                t.id AS topic_id,         -- 4
+                t.name AS topic_name,     -- 5
+                pl.created_at AS liked_at -- 6 点赞时间
+            FROM post_likes pl
+            JOIN posts p ON pl.post_id = p.id
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE pl.user_id = %s
+            AND p.is_deleted = 0
+            ORDER BY pl.created_at DESC
+            LIMIT 100
+        """, (user_id,))
+        likes = cur.fetchall()
 
     current_is_admin = is_admin(current_username) if current_username else False
 
@@ -671,24 +713,27 @@ async def notifications_page(request: Request, token: str = Cookie(None)):
     if not user_id:
         return RedirectResponse("/login", status_code=302)
 
-    # 查询最近 100 条通知
-    cur.execute("""
-        SELECT
-            n.id,              -- 0
-            n.type,            -- 1
-            n.message,         -- 2
-            n.is_read,         -- 3
-            n.related_post_id, -- 4
-            n.related_comment_id, -- 5
-            n.created_at,      -- 6
-            fu.username        -- 7 from_username
-        FROM notifications n
-        LEFT JOIN users fu ON n.from_user_id = fu.id
-        WHERE n.user_id = %s
-        ORDER BY n.created_at DESC
-        LIMIT 100
-    """, (user_id,))
-    rows = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+
+        # 查询最近 100 条通知
+        cur.execute("""
+            SELECT
+                n.id,              -- 0
+                n.type,            -- 1
+                n.message,         -- 2
+                n.is_read,         -- 3
+                n.related_post_id, -- 4
+                n.related_comment_id, -- 5
+                n.created_at,      -- 6
+                fu.username        -- 7 from_username
+            FROM notifications n
+            LEFT JOIN users fu ON n.from_user_id = fu.id
+            WHERE n.user_id = %s
+            ORDER BY n.created_at DESC
+            LIMIT 100
+        """, (user_id,))
+        rows = cur.fetchall()
 
     # 统计未读数量
     unread_count = get_unread_notifications_count(user_id)
@@ -713,9 +758,11 @@ async def notifications_read_all(token: str = Cookie(None)):
     user_id = get_user_id(username)
     if not user_id:
         return RedirectResponse("/login", status_code=302)
-
-    cur.execute("UPDATE notifications SET is_read = 1 WHERE user_id = %s AND is_read = 0", (user_id,))
-    conn.commit()
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE notifications SET is_read = 1 WHERE user_id = %s AND is_read = 0", (user_id,))
+        conn.commit()
     return RedirectResponse("/notifications", status_code=302)
 
 
@@ -756,9 +803,11 @@ async def admin_delete_post(post_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
-
-    cur.execute("UPDATE posts SET is_deleted = 1 WHERE id = %s", (post_id,))
-    conn.commit()
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE posts SET is_deleted = 1 WHERE id = %s", (post_id,))
+        conn.commit()
     return RedirectResponse("/", status_code=302)
 
 
@@ -768,8 +817,10 @@ async def admin_delete_comment(comment_id: int, post_id: int = Form(...), token:
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("UPDATE comments SET is_deleted = 1 WHERE id = %s", (comment_id,))
-    conn.commit()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE comments SET is_deleted = 1 WHERE id = %s", (comment_id,))
+        conn.commit()
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
 
@@ -779,8 +830,10 @@ async def admin_users(request: Request, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("SELECT id, username, is_admin, is_banned FROM users ORDER BY id ASC")
-    users = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, username, is_admin, is_banned FROM users ORDER BY id ASC")
+        users = cur.fetchall()
 
     return templates.TemplateResponse(
         "admin_users.html",
@@ -794,18 +847,22 @@ async def admin_ban_user(user_id: int, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("SELECT username, is_admin, is_banned FROM users WHERE id = %s", (user_id,))
-    row = cur.fetchone()
-    if not row:
-        return RedirectResponse("/admin/users", status_code=302)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    target_username, target_is_admin, target_is_banned = row
-    if target_username == username or target_is_admin == 1:
-        return RedirectResponse("/admin/users", status_code=302)
+            # 先查出这个用户的信息
+        cur.execute("SELECT username, is_admin, is_banned FROM users WHERE id = %s", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return RedirectResponse("/admin/users", status_code=302)
 
-    new_flag = 0 if target_is_banned == 1 else 1
-    cur.execute("UPDATE users SET is_banned = %s WHERE id = %s", (new_flag, user_id))
-    conn.commit()
+        target_username, target_is_admin, target_is_banned = row
+        if target_username == username or target_is_admin == 1:
+            return RedirectResponse("/admin/users", status_code=302)
+
+        new_flag = 0 if target_is_banned == 1 else 1
+        cur.execute("UPDATE users SET is_banned = %s WHERE id = %s", (new_flag, user_id))
+        conn.commit()
     return RedirectResponse("/admin/users", status_code=302)
 
 
@@ -815,13 +872,15 @@ async def admin_topics(request: Request, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("""
-        SELECT t.id, t.name, t.description, t.is_approved, t.created_at, u.username
-        FROM topics t
-        LEFT JOIN users u ON t.created_by = u.id
-        ORDER BY t.created_at DESC
-    """)
-    topics = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT t.id, t.name, t.description, t.is_approved, t.created_at, u.username
+            FROM topics t
+            LEFT JOIN users u ON t.created_by = u.id
+            ORDER BY t.created_at DESC
+        """)
+        topics = cur.fetchall()
 
     return templates.TemplateResponse(
         "admin_topics.html",
@@ -835,17 +894,20 @@ async def admin_approve_topic(topic_id: int, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    # 先查出这个 topic 的信息
-    cur.execute("SELECT name, created_by FROM topics WHERE id = %s", (topic_id,))
-    row = cur.fetchone()
-    if not row:
-        return RedirectResponse("/admin/topics", status_code=302)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    topic_name, created_by = row
+        # 先查出这个 topic 的信息
+        cur.execute("SELECT name, created_by FROM topics WHERE id = %s", (topic_id,))
+        row = cur.fetchone()
+        if not row:
+            return RedirectResponse("/admin/topics", status_code=302)
 
-    # 标记为通过
-    cur.execute("UPDATE topics SET is_approved = 1 WHERE id = %s", (topic_id,))
-    conn.commit()
+        topic_name, created_by = row
+
+        # 标记为通过
+        cur.execute("UPDATE topics SET is_approved = 1 WHERE id = %s", (topic_id,))
+        conn.commit()
 
     # 给创建者发送通知（如果有创建者）
     if created_by:
@@ -867,8 +929,10 @@ async def admin_delete_topic(topic_id: int, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("DELETE FROM topics WHERE id = %s", (topic_id,))
-    conn.commit()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM topics WHERE id = %s", (topic_id,))
+        conn.commit()
     return RedirectResponse("/admin/topics", status_code=302)
 
 
@@ -878,14 +942,18 @@ async def admin_reports(request: Request, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("""
-        SELECT r.id, r.type, r.target_id, u.username, r.reason, r.status, r.created_at
-        FROM reports r
-        JOIN users u ON r.reporter_id = u.id
-        WHERE r.status = 'pending'
-        ORDER BY r.created_at DESC
-    """)
-    reports = cur.fetchall()
+    with get_db_conn() as conn: 
+        cur = conn.cursor()
+
+        # 查所有未处理的举报
+        cur.execute("""
+            SELECT r.id, r.type, r.target_id, u.username, r.reason, r.status, r.created_at
+            FROM reports r
+            JOIN users u ON r.reporter_id = u.id
+            WHERE r.status = 'pending'
+            ORDER BY r.created_at DESC
+        """)
+        reports = cur.fetchall()
 
     return templates.TemplateResponse(
         "admin_reports.html",
@@ -899,21 +967,24 @@ async def admin_handle_report(report_id: int, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    # 先查出举报详情
-    cur.execute("""
-        SELECT type, target_id, reporter_id
-        FROM reports
-        WHERE id = %s
-    """, (report_id,))
-    row = cur.fetchone()
-    if not row:
-        return RedirectResponse("/admin/reports", status_code=302)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    report_type, target_id, reporter_id = row
+        # 先查出举报详情
+        cur.execute("""
+            SELECT type, target_id, reporter_id
+            FROM reports
+            WHERE id = %s
+        """, (report_id,))
+        row = cur.fetchone()
+        if not row:
+            return RedirectResponse("/admin/reports", status_code=302)
 
-    # 标记已处理
-    cur.execute("UPDATE reports SET status = 'handled' WHERE id = %s", (report_id,))
-    conn.commit()
+        report_type, target_id, reporter_id = row
+
+        # 标记已处理
+        cur.execute("UPDATE reports SET status = 'handled' WHERE id = %s", (report_id,))
+        conn.commit()
 
     # 给举报人发通知
     # 拼一个简短说明
@@ -941,11 +1012,15 @@ async def admin_inbox(request: Request, token: str = Cookie(None)):
     if not username or not is_admin(username):
         return RedirectResponse("/", status_code=302)
 
-    cur.execute("SELECT COUNT(*) FROM topics WHERE is_approved = 0")
-    pending_topics = cur.fetchone()[0] or 0
+    with get_db_conn() as conn: 
+        cur = conn.cursor()
 
-    cur.execute("SELECT COUNT(*) FROM reports WHERE status = 'pending'")
-    pending_reports = cur.fetchone()[0] or 0
+        # 统计未处理的板块申请和举报数量
+        cur.execute("SELECT COUNT(*) FROM topics WHERE is_approved = 0")
+        pending_topics = cur.fetchone()[0] or 0
+
+        cur.execute("SELECT COUNT(*) FROM reports WHERE status = 'pending'")
+        pending_reports = cur.fetchone()[0] or 0
 
     return templates.TemplateResponse(
         "admin_inbox.html",
@@ -966,21 +1041,25 @@ async def register(username: str = Form(), password: str = Form()):
     if len(password) > 50:
         return HTMLResponse("密码太长啦，请不要超过 50 个字符。<a href='/register'>返回</a>", status_code=400)
 
-    hashed = pwd_context.hash(password)
-    try:
-        cur.execute(
-            "INSERT INTO users (username, password) VALUES (%s, %s)",
-            (username, hashed),
-        )
-        return RedirectResponse("/login", status_code=302)
-    except pymysql.err.IntegrityError:
-        return HTMLResponse("用户名已存在，请换一个。<a href='/register'>返回</a>", status_code=400)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        hashed = pwd_context.hash(password)
+        try:
+            cur.execute(
+                "INSERT INTO users (username, password) VALUES (%s, %s)",
+                (username, hashed),
+            )
+            return RedirectResponse("/login", status_code=302)
+        except pymysql.err.IntegrityError:
+            return HTMLResponse("用户名已存在，请换一个。<a href='/register'>返回</a>", status_code=400)
 
 
 @app.post("/login")
 async def login(username: str = Form(), password: str = Form()):
-    cur.execute("SELECT password, is_banned FROM users WHERE username = %s", (username,))
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT password, is_banned FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
     if not row or not pwd_context.verify(password, row[0]):
         return HTMLResponse("用户不存在或密码错误。<a href='/login'>返回</a>", status_code=400)
 
@@ -1002,13 +1081,17 @@ async def new_post_page(request: Request, token: str = Cookie(None)):
     if not username:
         return RedirectResponse("/login", status_code=302)
 
-    cur.execute("""
-        SELECT id, name
-        FROM topics
-        WHERE is_approved = 1
-        ORDER BY name ASC
-    """)
-    topics = cur.fetchall()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+
+        # 取出所有已批准的板块
+        cur.execute("""
+            SELECT id, name
+            FROM topics
+            WHERE is_approved = 1
+            ORDER BY name ASC
+        """)
+        topics = cur.fetchall()
 
     return templates.TemplateResponse(
         "new_post.html",
@@ -1031,21 +1114,24 @@ async def new_post(
     if not user_id:
         return RedirectResponse("/login", status_code=302)
 
-    now = datetime.utcnow()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    if topic_id:
-        cur.execute(
-            "INSERT INTO posts (user_id, title, content, created_at, topic_id) VALUES (%s, %s, %s, %s, %s)",
-            (user_id, title, content, now, topic_id),
-        )
-    else:
-        cur.execute(
-            "INSERT INTO posts (user_id, title, content, created_at) VALUES (%s, %s, %s, %s)",
-            (user_id, title, content, now),
-        )
+        now = datetime.utcnow()
 
-    cur.execute("SELECT LAST_INSERT_ID()")
-    post_id = cur.fetchone()[0]
+        if topic_id:
+            cur.execute(
+                "INSERT INTO posts (user_id, title, content, created_at, topic_id) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, title, content, now, topic_id),
+            )
+        else:
+            cur.execute(
+                "INSERT INTO posts (user_id, title, content, created_at) VALUES (%s, %s, %s, %s)",
+                (user_id, title, content, now),
+            )
+
+        cur.execute("SELECT LAST_INSERT_ID()")
+        post_id = cur.fetchone()[0]
 
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
@@ -1075,37 +1161,42 @@ async def new_topic(name: str = Form(), description: str = Form(""), token: str 
     if not name:
         return HTMLResponse("板块名称不能为空。<a href='/topic/new'>返回</a>", status_code=400)
 
-    now = datetime.utcnow()
-    try:
-        cur.execute(
-            "INSERT INTO topics (name, description, created_by, is_approved, created_at) VALUES (%s, %s, %s, 0, %s)",
-            (name, description, user_id, now),
-        )
-        conn.commit()
-        return HTMLResponse("板块创建申请已提交，等待管理员审核。<a href='/'>返回首页</a>")
-    except pymysql.err.IntegrityError:
-        return HTMLResponse("该板块名称已存在，请换一个。<a href='/topic/new'>返回</a>", status_code=400)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        now = datetime.utcnow()
+        try:
+            cur.execute(
+                "INSERT INTO topics (name, description, created_by, is_approved, created_at) VALUES (%s, %s, %s, 0, %s)",
+                (name, description, user_id, now),
+            )
+            conn.commit()
+            return HTMLResponse("板块创建申请已提交，等待管理员审核。<a href='/'>返回首页</a>")
+        except pymysql.err.IntegrityError:
+            return HTMLResponse("该板块名称已存在，请换一个。<a href='/topic/new'>返回</a>", status_code=400)
 
 
 @app.get("/topic/{topic_id}", response_class=HTMLResponse)
 async def topic_page(topic_id: int, request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
 
-    # 查这个 topic
-    cur.execute("SELECT id, name FROM topics WHERE id = %s AND is_approved = 1", (topic_id,))
-    topic = cur.fetchone()
-    if not topic:
-        return HTMLResponse("板块不存在或未通过审核。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    # 查属于这个 topic 的帖子
-    cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username
-        FROM posts p
-        JOIN users u ON p.user_id = u.id
-        WHERE p.is_deleted = 0 AND p.topic_id = %s
-        ORDER BY p.id DESC
-    """, (topic_id,))
-    posts = cur.fetchall()
+        # 查这个 topic
+        cur.execute("SELECT id, name FROM topics WHERE id = %s AND is_approved = 1", (topic_id,))
+        topic = cur.fetchone()
+        if not topic:
+            return HTMLResponse("板块不存在或未通过审核。<a href='/'>返回首页</a>", status_code=404)
+
+        # 查属于这个 topic 的帖子
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.is_deleted = 0 AND p.topic_id = %s
+            ORDER BY p.id DESC
+        """, (topic_id,))
+        posts = cur.fetchall()
 
     admin_flag = is_admin(username) if username else False
 
@@ -1128,42 +1219,44 @@ async def topic_page(topic_id: int, request: Request, token: str = Cookie(None))
 async def post_detail(post_id: int, request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
 
-    # 查询帖子
-    cur.execute("""
-        SELECT p.id, p.title, p.content, p.created_at, u.username, p.user_id, t.name
-        FROM posts p
-        JOIN users u ON p.user_id = u.id
-        LEFT JOIN topics t ON p.topic_id = t.id
-        WHERE p.id = %s AND p.is_deleted = 0
-    """, (post_id,))
-    row = cur.fetchone()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    if not row:
-        return HTMLResponse("帖子不存在。<a href='/'>返回首页</a>", status_code=404)
+        # 查询帖子
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username, p.user_id, t.name
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            WHERE p.id = %s AND p.is_deleted = 0
+        """, (post_id,))
+        row = cur.fetchone()
 
-    post = {
-        "id": row[0],
-        "title": row[1],
-        "content": row[2],
-        "created_at": row[3],
-        "username": row[4],
-        "user_id": row[5],
-        "topic_name": row[6],
-    }
+        if not row:
+            return HTMLResponse("帖子不存在。<a href='/'>返回首页</a>", status_code=404)
 
-    # 查询评论
-    cur.execute("""
-        SELECT c.id, c.content, c.created_at, u.username
-        FROM comments c
-        JOIN users u ON c.user_id = u.id
-        WHERE c.post_id = %s AND c.is_deleted = 0
-        ORDER BY c.id ASC
-    """, (post_id,))
-    comments = cur.fetchall()
+        post = {
+            "id": row[0],
+            "title": row[1],
+            "content": row[2],
+            "created_at": row[3],
+            "username": row[4],
+            "user_id": row[5],
+            "topic_name": row[6],
+        }
+
+        # 查询评论
+        cur.execute("""
+            SELECT c.id, c.content, c.created_at, u.username
+            FROM comments c
+            JOIN users u ON c.user_id = u.id
+            WHERE c.post_id = %s AND c.is_deleted = 0
+            ORDER BY c.id ASC
+        """, (post_id,))
+        comments = cur.fetchall()
 
     admin_flag = is_admin(username) if username else False
 
-    # 点赞信息
     likes_count = get_post_likes_count(post_id)
     user_like_flag = False
     current_user_id = None
@@ -1172,10 +1265,8 @@ async def post_detail(post_id: int, request: Request, token: str = Cookie(None))
         if current_user_id:
             user_like_flag = user_liked_post(current_user_id, post_id)
 
-    # 当前用户是否是作者
     is_author = bool(current_user_id and current_user_id == post["user_id"])
 
-    # 未读通知数（用于导航）
     unread_count = 0
     if username and current_user_id:
         unread_count = get_unread_notifications_count(current_user_id)
@@ -1206,38 +1297,38 @@ async def like_post(post_id: int, token: str = Cookie(None)):
     if not user_id:
         return RedirectResponse("/login", status_code=302)
 
-    # 检查帖子存在且未删除
-    cur.execute("SELECT id, user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
-
-    post_id_db, post_owner_id, post_title = row
-
     now = datetime.utcnow()
 
-    # 如果已经点过赞，则取消赞；否则插入新赞
-    if user_liked_post(user_id, post_id):
-        cur.execute("DELETE FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
-    else:
-        cur.execute(
-            "INSERT INTO post_likes (post_id, user_id, created_at) VALUES (%s, %s, %s)",
-            (post_id, user_id, now),
-        )
-        # 只有点赞时发通知，且不给自己点赞发通知
-        if post_owner_id != user_id:
-            msg = f"{username} 给你的帖子《{post_title}》点了赞"
-            create_notification(
-                user_id=post_owner_id,
-                type_="like_on_post",
-                message=msg,
-                related_post_id=post_id,
-                from_user_id=user_id,
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+
+        # 检查帖子存在且未删除
+        cur.execute("SELECT id, user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+
+        post_id_db, post_owner_id, post_title = row
+
+        if user_liked_post(user_id, post_id):
+            cur.execute("DELETE FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
+        else:
+            cur.execute(
+                "INSERT INTO post_likes (post_id, user_id, created_at) VALUES (%s, %s, %s)",
+                (post_id, user_id, now),
             )
+            if post_owner_id != user_id:
+                msg = f"{username} 给你的帖子《{post_title}》点了赞"
+                create_notification(
+                    user_id=post_owner_id,
+                    type_="like_on_post",
+                    message=msg,
+                    related_post_id=post_id,
+                    from_user_id=user_id,
+                )
 
-    conn.commit()
+        conn.commit()
 
-    # 操作完回到帖子详情页
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
 
@@ -1250,42 +1341,45 @@ async def api_like_post(post_id: int, token: str = Cookie(None)):
     user_id = get_user_id(username)
     if not user_id:
         return JSONResponse({"error": "no_user"}, status_code=401)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    # 检查帖子是否存在
-    cur.execute("SELECT id, user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
-    row = cur.fetchone()
-    if not row:
-        return JSONResponse({"error": "post_not_found"}, status_code=404)
+        # 检查帖子是否存在
+        cur.execute("SELECT id, user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            return JSONResponse({"error": "post_not_found"}, status_code=404)
 
-    post_id_db, post_owner_id, post_title = row
+        post_id_db, post_owner_id, post_title = row
 
-    now = datetime.utcnow()
+        now = datetime.utcnow()
 
-    # 切换点赞状态
-    if user_liked_post(user_id, post_id):
-        # 已点赞 → 取消赞
-        cur.execute("DELETE FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
-        liked = False
-    else:
-        # 未点赞 → 点赞
-        cur.execute(
-            "INSERT INTO post_likes (post_id, user_id, created_at) VALUES (%s, %s, %s)",
-            (post_id, user_id, now),
-        )
-        liked = True
-
-        # 点赞时发通知
-        if post_owner_id != user_id:
-            msg = f"{username} 给你的帖子《{post_title}》点了赞"
-            create_notification(
-                user_id=post_owner_id,
-                type_="like_on_post",
-                message=msg,
-                related_post_id=post_id,
-                from_user_id=user_id,
+        # 切换点赞状态
+        if user_liked_post(user_id, post_id):
+            # 已点赞 → 取消赞
+            cur.execute("DELETE FROM post_likes WHERE post_id = %s AND user_id = %s", (post_id, user_id))
+            liked = False
+        else:
+            # 未点赞 → 点赞
+            cur.execute(
+                "INSERT INTO post_likes (post_id, user_id, created_at) VALUES (%s, %s, %s)",
+                (post_id, user_id, now),
             )
+            liked = True
 
-    conn.commit()
+            # 点赞时发通知
+            if post_owner_id != user_id:
+                msg = f"{username} 给你的帖子《{post_title}》点了赞"
+                create_notification(
+                    user_id=post_owner_id,
+                    type_="like_on_post",
+                    message=msg,
+                    related_post_id=post_id,
+                    from_user_id=user_id,
+                )
+
+        conn.commit()
     # 返回最新点赞数与当前状态
     likes = get_post_likes_count(post_id)
     return JSONResponse({"liked": liked, "likes": likes})
@@ -1308,16 +1402,19 @@ async def report_post(
 
     now = datetime.utcnow()
 
-    cur.execute("SELECT id FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    cur.execute(
-        "INSERT INTO reports (type, target_id, reporter_id, reason, status, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
-        ("post", post_id, reporter_id, reason, "pending", now),
-    )
-    conn.commit()
+        cur.execute("SELECT id FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+
+        cur.execute(
+            "INSERT INTO reports (type, target_id, reporter_id, reason, status, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("post", post_id, reporter_id, reason, "pending", now),
+        )
+        conn.commit()
 
     return HTMLResponse("举报已提交，感谢你的反馈。<a href='/post/%d'>返回帖子</a>" % post_id)
 
@@ -1340,16 +1437,19 @@ async def report_comment(
 
     now = datetime.utcnow()
 
-    cur.execute("SELECT id FROM comments WHERE id = %s AND is_deleted = 0", (comment_id,))
-    row = cur.fetchone()
-    if not row:
-        return HTMLResponse("评论不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    cur.execute(
-        "INSERT INTO reports (type, target_id, reporter_id, reason, status, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
-        ("comment", comment_id, reporter_id, reason, "pending", now),
-    )
-    conn.commit()
+        cur.execute("SELECT id FROM comments WHERE id = %s AND is_deleted = 0", (comment_id,))
+        row = cur.fetchone()
+        if not row:
+            return HTMLResponse("评论不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+
+        cur.execute(
+            "INSERT INTO reports (type, target_id, reporter_id, reason, status, created_at) VALUES (%s, %s, %s, %s, %s, %s)",
+            ("comment", comment_id, reporter_id, reason, "pending", now),
+        )
+        conn.commit()
 
     return HTMLResponse("举报已提交，感谢你的反馈。<a href='/post/%d'>返回帖子</a>" % post_id)
 
@@ -1367,39 +1467,41 @@ async def add_comment(post_id: int = Form(), content: str = Form(), token: str =
     if not user_id:
         return RedirectResponse("/login", status_code=302)
 
-    now = datetime.utcnow()
-    cur.execute(
-        "INSERT INTO comments (post_id, user_id, content, created_at) VALUES (%s, %s, %s, %s)",
-        (post_id, user_id, content, now),
-    )
-    # 获取新评论ID
-    cur.execute("SELECT LAST_INSERT_ID()")
-    comment_id = cur.fetchone()[0]
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        now = datetime.utcnow()
+        cur.execute(
+            "INSERT INTO comments (post_id, user_id, content, created_at) VALUES (%s, %s, %s, %s)",
+            (post_id, user_id, content, now),
+        )
+        # 获取新评论ID
+        cur.execute("SELECT LAST_INSERT_ID()")
+        comment_id = cur.fetchone()[0]
 
-    # 给帖子作者发送通知（如果评论人不是作者本人）
-    cur.execute("SELECT user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
-    row = cur.fetchone()
-    if row:
-        post_owner_id, post_title = row
-        if post_owner_id != user_id:
-            # 构造简单消息
-            msg = f"{username} 评论了你的帖子《{post_title}》"
-            create_notification(
-                user_id=post_owner_id,
-                type_="new_comment_on_post",
-                message=msg,
-                related_post_id=post_id,
-                related_comment_id=comment_id,
-                from_user_id=user_id,
-            )
+        # 给帖子作者发送通知（如果评论人不是作者本人）
+        cur.execute("SELECT user_id, title FROM posts WHERE id = %s AND is_deleted = 0", (post_id,))
+        row = cur.fetchone()
+        if row:
+            post_owner_id, post_title = row
+            if post_owner_id != user_id:
+                # 构造简单消息
+                msg = f"{username} 评论了你的帖子《{post_title}》"
+                create_notification(
+                    user_id=post_owner_id,
+                    type_="new_comment_on_post",
+                    message=msg,
+                    related_post_id=post_id,
+                    related_comment_id=comment_id,
+                    from_user_id=user_id,
+                )
 
-    msg = {
-        "type": "new_comment",
-        "content": content,
-        "username": username,
-        "created_at": now.strftime("%Y-%m-%d %H:%M"),
-    }
-    await comment_manager.broadcast(post_id, msg)
+        msg = {
+            "type": "new_comment",
+            "content": content,
+            "username": username,
+            "created_at": now.strftime("%Y-%m-%d %H:%M"),
+        }
+        await comment_manager.broadcast(post_id, msg)
 
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
@@ -1413,21 +1515,25 @@ async def edit_post_page(post_id: int, request: Request, token: str = Cookie(Non
     if not username:
         return RedirectResponse("/login", status_code=302)
 
-    cur.execute("""
-        SELECT id, title, content, user_id, is_deleted
-        FROM posts
-        WHERE id = %s
-    """, (post_id,))
-    row = cur.fetchone()
-    if not row or row[4] == 1:
-        return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    post = {
-        "id": row[0],
-        "title": row[1],
-        "content": row[2],
-        "user_id": row[3],
-    }
+            # 查帖子信息
+        cur.execute("""
+            SELECT id, title, content, user_id, is_deleted
+            FROM posts
+            WHERE id = %s
+        """, (post_id,))
+        row = cur.fetchone()
+        if not row or row[4] == 1:
+            return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+
+        post = {
+            "id": row[0],
+            "title": row[1],
+            "content": row[2],
+            "user_id": row[3],
+        }
 
     user_id = get_user_id(username)
     if user_id != post["user_id"] and not is_admin(username):
@@ -1445,23 +1551,27 @@ async def edit_post(post_id: int, title: str = Form(), content: str = Form(), to
     if not username:
         return RedirectResponse("/login", status_code=302)
 
-    cur.execute("""
-        SELECT user_id, is_deleted FROM posts WHERE id = %s
-    """, (post_id,))
-    row = cur.fetchone()
-    if not row or row[1] == 1:
-        return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    post_user_id = row[0]
-    user_id = get_user_id(username)
-    if user_id != post_user_id and not is_admin(username):
-        return HTMLResponse("你没有权限编辑这个帖子。<a href='/'>返回首页</a>", status_code=403)
+        # 查帖子信息
+        cur.execute("""
+            SELECT user_id, is_deleted FROM posts WHERE id = %s
+        """, (post_id,))
+        row = cur.fetchone()
+        if not row or row[1] == 1:
+            return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
 
-    cur.execute(
-        "UPDATE posts SET title = %s, content = %s WHERE id = %s",
-        (title, content, post_id)
-    )
-    conn.commit()
+        post_user_id = row[0]
+        user_id = get_user_id(username)
+        if user_id != post_user_id and not is_admin(username):
+            return HTMLResponse("你没有权限编辑这个帖子。<a href='/'>返回首页</a>", status_code=403)
+
+        cur.execute(
+            "UPDATE posts SET title = %s, content = %s WHERE id = %s",
+            (title, content, post_id)
+        )
+        conn.commit()
 
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
@@ -1476,24 +1586,27 @@ async def delete_post(post_id: int, token: str = Cookie(None)):
     if not username:
         return RedirectResponse("/login", status_code=302)
 
-    # 查帖子信息
-    cur.execute("SELECT user_id, is_deleted FROM posts WHERE id = %s", (post_id,))
-    row = cur.fetchone()
-    if not row or row[1] == 1:
-        return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
 
-    post_user_id, _ = row
-    current_user_id = get_user_id(username)
-    if not current_user_id:
-        return RedirectResponse("/login", status_code=302)
+        # 查帖子信息
+        cur.execute("SELECT user_id, is_deleted FROM posts WHERE id = %s", (post_id,))
+        row = cur.fetchone()
+        if not row or row[1] == 1:
+            return HTMLResponse("帖子不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
 
-    # 权限：作者本人或管理员
-    if current_user_id != post_user_id and not is_admin(username):
-        return HTMLResponse("你没有权限删除这个帖子。<a href='/'>返回首页</a>", status_code=403)
+        post_user_id, _ = row
+        current_user_id = get_user_id(username)
+        if not current_user_id:
+            return RedirectResponse("/login", status_code=302)
 
-    # 软删除
-    cur.execute("UPDATE posts SET is_deleted = 1 WHERE id = %s", (post_id,))
-    conn.commit()
+        # 权限：作者本人或管理员
+        if current_user_id != post_user_id and not is_admin(username):
+            return HTMLResponse("你没有权限删除这个帖子。<a href='/'>返回首页</a>", status_code=403)
+
+        # 软删除
+        cur.execute("UPDATE posts SET is_deleted = 1 WHERE id = %s", (post_id,))
+        conn.commit()
 
     return RedirectResponse("/", status_code=302)
 
