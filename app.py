@@ -33,15 +33,34 @@ class CommentManager:
         self.connections: dict[int, list[WebSocket]] = {}
         # 正在输入的用户，key: post_id -> set(username)
         self.typing_users: dict[int, set[str]] = {}
+        # websocket -> post_id
+        self.ws_to_post: dict[WebSocket, int] = {}
+        # websocket -> username
+        self.ws_to_username: dict[WebSocket, str] = {}
 
     async def connect(self, websocket: WebSocket, post_id: int, username: str | None):
         await websocket.accept()
         self.connections.setdefault(post_id, []).append(websocket)
+        # track websocket mappings
+        self.ws_to_post[websocket] = post_id
+        if username:
+            self.ws_to_username[websocket] = username
         await self.broadcast_online_count(post_id)
 
     def disconnect(self, websocket: WebSocket, post_id: int, username: str | None):
         if post_id in self.connections and websocket in self.connections[post_id]:
             self.connections[post_id].remove(websocket)
+        # cleanup mappings
+        if websocket in self.ws_to_post:
+            try:
+                del self.ws_to_post[websocket]
+            except KeyError:
+                pass
+        if websocket in self.ws_to_username:
+            try:
+                del self.ws_to_username[websocket]
+            except KeyError:
+                pass
         if username and post_id in self.typing_users:
             self.typing_users[post_id].discard(username)
 
@@ -67,6 +86,24 @@ class CommentManager:
             self.typing_users[post_id].discard(username)
         msg = {"type": "typing", "users": list(self.typing_users[post_id])}
         await self.broadcast(post_id, msg)
+
+    async def close_by_username(self, username: str):
+        # Close all websockets for a given username.
+        # Make a copy of items to avoid mutation during iteration.
+        items = list(self.ws_to_username.items())
+        for ws, u in items:
+            if u == username:
+                post_id = self.ws_to_post.get(ws)
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                # cleanup
+                try:
+                    if post_id is not None:
+                        self.disconnect(ws, post_id, u)
+                except Exception:
+                    pass
 
 
 comment_manager = CommentManager()
@@ -256,6 +293,11 @@ def is_banned(username: str) -> bool:
     return bool(row and row[0] == 1)
 
 
+def is_banned_by_username(username: str) -> bool:
+    """Alias helper that checks ban status for a username (DB-backed)."""
+    return is_banned(username)
+
+
 def create_notification(
     user_id: int,
     type_: str,
@@ -287,6 +329,18 @@ def get_unread_notifications_count(user_id: int) -> int:
         )
         row = cur.fetchone()
     return row[0] if row else 0
+
+
+def render_error(request: Request, message: str, back_url: Optional[str] = None, status_code: int = 400):
+    return templates.TemplateResponse(
+        "error.html",
+        {
+            "request": request,
+            "message": message,
+            "back_url": back_url,
+        },
+        status_code=status_code,
+    )
 
 
 # ================== 页面路由：首页 / 登录 / 注册 / 退出 ==================
@@ -330,6 +384,24 @@ async def home(
         """, (PAGE_SIZE, offset))
         raw_posts = cur.fetchall()
 
+        # TOP 热门帖子（按点赞数降序，取前 5 条）
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username, t.name,
+                   IFNULL(l.like_count, 0) AS like_count
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            LEFT JOIN topics t ON p.topic_id = t.id
+            LEFT JOIN (
+                SELECT post_id, COUNT(*) AS like_count
+                FROM post_likes
+                GROUP BY post_id
+            ) l ON p.id = l.post_id
+            WHERE p.is_deleted = 0
+            ORDER BY like_count DESC, p.id DESC
+            LIMIT 5
+        """)
+        top_posts = cur.fetchall()
+
     # 组装带点赞数的 posts：[(id, title, content, created_at, username, topic_name, likes), ...]
     posts = []
     for p in raw_posts:
@@ -356,6 +428,7 @@ async def home(
             "total_pages": total_pages,
             "has_prev": has_prev,
             "has_next": has_next,
+            "top_posts": top_posts,
         },
     )
 
@@ -395,30 +468,69 @@ async def api_posts():
 async def search_page(
     request: Request,
     q: str = Query("", alias="q"),
+    scope: str = Query("all", regex="^(all|title|content|author|topic)$"),
+    page: int = Query(1, ge=1),
     token: str = Cookie(None),
 ):
     username = get_username_from_token(token)
     keyword = q.strip()
 
+    PAGE_SIZE = 10
+    offset = (page - 1) * PAGE_SIZE
+
     results = []
+    total_posts = 0
+
     if keyword:
         like = f"%{keyword}%"
+
+        # 根据 scope 构造 WHERE 条件
+        if scope == "title":
+            where_clause = "p.title LIKE %s"
+            params_like = (like,)
+        elif scope == "content":
+            where_clause = "p.content LIKE %s"
+            params_like = (like,)
+        elif scope == "author":
+            where_clause = "u.username LIKE %s"
+            params_like = (like,)
+        elif scope == "topic":
+            where_clause = "t.name IS NOT NULL AND t.name LIKE %s"
+            params_like = (like,)
+        else:  # all
+            where_clause = """
+                p.title LIKE %s
+             OR p.content LIKE %s
+             OR u.username LIKE %s
+             OR (t.name IS NOT NULL AND t.name LIKE %s)
+            """
+            params_like = (like, like, like, like)
+
         with get_db_conn() as conn:
             cur = conn.cursor()
-            cur.execute("""
+
+            # 统计总数
+            cur.execute(f"""
+                SELECT COUNT(*)
+                FROM posts p
+                JOIN users u ON p.user_id = u.id
+                LEFT JOIN topics t ON p.topic_id = t.id
+                WHERE p.is_deleted = 0
+                  AND ( {where_clause} )
+            """, params_like)
+            total_posts = cur.fetchone()[0] or 0
+
+            # 分页查询
+            cur.execute(f"""
                 SELECT p.id, p.title, p.content, p.created_at, u.username, t.name
                 FROM posts p
                 JOIN users u ON p.user_id = u.id
                 LEFT JOIN topics t ON p.topic_id = t.id
                 WHERE p.is_deleted = 0
-                  AND (
-                        p.title LIKE %s
-                     OR p.content LIKE %s
-                     OR u.username LIKE %s
-                     OR (t.name IS NOT NULL AND t.name LIKE %s)
-                  )
+                  AND ( {where_clause} )
                 ORDER BY p.id DESC
-            """, (like, like, like, like))
+                LIMIT %s OFFSET %s
+            """, params_like + (PAGE_SIZE, offset))
             rows = cur.fetchall()
 
         for row in rows:
@@ -436,6 +548,10 @@ async def search_page(
 
     admin_flag = is_admin(username) if username else False
 
+    total_pages = (total_posts + PAGE_SIZE - 1) // PAGE_SIZE if keyword else 0
+    has_prev = page > 1
+    has_next = page < total_pages if total_pages > 0 else False
+
     return templates.TemplateResponse(
         "search.html",
         {
@@ -443,7 +559,12 @@ async def search_page(
             "username": username,
             "is_admin": admin_flag,
             "q": keyword,
+            "scope": scope,
             "results": results,
+            "page": page,
+            "total_pages": total_pages,
+            "has_prev": has_prev,
+            "has_next": has_next,
         },
     )
 
@@ -468,8 +589,10 @@ async def logout():
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -477,7 +600,9 @@ async def settings_page(request: Request, token: str = Cookie(None)):
         cur.execute("SELECT id, is_admin, is_banned FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         if not row:
-            return RedirectResponse("/login", status_code=302)
+            resp = RedirectResponse("/login", status_code=302)
+            resp.delete_cookie("token")
+            return resp
 
         user_id, user_is_admin, user_is_banned = row
 
@@ -495,14 +620,17 @@ async def settings_page(request: Request, token: str = Cookie(None)):
 
 @app.post("/settings/password")
 async def change_password(
+    request: Request,
     old_password: str = Form(),
     new_password: str = Form(),
     new_password2: str = Form(),
     token: str = Cookie(None),
 ):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -511,27 +639,29 @@ async def change_password(
         cur.execute("SELECT password FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
         if not row:
-            return RedirectResponse("/login", status_code=302)
+            resp = RedirectResponse("/login", status_code=302)
+            resp.delete_cookie("token")
+            return resp
 
         hashed = row[0]
 
         # 验证旧密码
         if not pwd_context.verify(old_password, hashed):
-            return HTMLResponse("旧密码错误。<a href='/settings'>返回设置</a>", status_code=400)
+            return render_error(request, "旧密码错误。", back_url="/settings", status_code=400)
 
         # 检查新密码一致
         if new_password != new_password2:
-            return HTMLResponse("两次输入的新密码不一致。<a href='/settings'>返回设置</a>", status_code=400)
+            return render_error(request, "两次输入的新密码不一致。", back_url="/settings", status_code=400)
 
         if len(new_password) < 6:
-            return HTMLResponse("新密码太短，至少 6 位。<a href='/settings'>返回设置</a>", status_code=400)
+            return render_error(request, "新密码太短，至少 6 位。", back_url="/settings", status_code=400)
 
         # 更新密码
         new_hashed = pwd_context.hash(new_password)
         cur.execute("UPDATE users SET password = %s WHERE username = %s", (new_hashed, username))
         conn.commit()
 
-    return HTMLResponse("密码修改成功，下次请使用新密码登录。<a href='/'>返回首页</a>")
+    return render_error(request, "密码修改成功，下次请使用新密码登录。", back_url="/", status_code=200)
 
 
 @app.get("/user/{username}", response_class=HTMLResponse)
@@ -652,8 +782,10 @@ async def user_comments(username: str, request: Request, token: str = Cookie(Non
 @app.get("/my/comments")
 async def my_comments_redirect(token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     return RedirectResponse(f"/user/{username}/comments", status_code=302)
 
 
@@ -719,20 +851,26 @@ async def user_likes(username: str, request: Request, token: str = Cookie(None))
 @app.get("/my/likes")
 async def my_likes_redirect(token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     return RedirectResponse(f"/user/{username}/likes", status_code=302)
 
 
 @app.get("/notifications", response_class=HTMLResponse)
 async def notifications_page(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -773,12 +911,16 @@ async def notifications_page(request: Request, token: str = Cookie(None)):
 @app.post("/notifications/read_all")
 async def notifications_read_all(token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -793,7 +935,7 @@ async def notifications_read_all(token: str = Cookie(None)):
 @app.websocket("/ws/comments/{post_id}")
 async def comments_websocket(websocket: WebSocket, post_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
+    if not username or is_banned(username):
         await websocket.close()
         return
 
@@ -822,8 +964,10 @@ async def comments_websocket(websocket: WebSocket, post_id: int, token: str = Co
 @app.post("/admin/post/{post_id}/delete")
 async def admin_delete_post(post_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -835,8 +979,10 @@ async def admin_delete_post(post_id: int, token: str = Cookie(None)):
 @app.post("/admin/comment/{comment_id}/delete")
 async def admin_delete_comment(comment_id: int, post_id: int = Form(...), token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -848,8 +994,10 @@ async def admin_delete_comment(comment_id: int, post_id: int = Form(...), token:
 @app.get("/admin/users", response_class=HTMLResponse)
 async def admin_users(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -865,8 +1013,10 @@ async def admin_users(request: Request, token: str = Cookie(None)):
 @app.post("/admin/user/{user_id}/ban")
 async def admin_ban_user(user_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -884,14 +1034,22 @@ async def admin_ban_user(user_id: int, token: str = Cookie(None)):
         new_flag = 0 if target_is_banned == 1 else 1
         cur.execute("UPDATE users SET is_banned = %s WHERE id = %s", (new_flag, user_id))
         conn.commit()
+        # If we've just banned the user, close any active websockets for them
+        if new_flag == 1:
+            try:
+                await comment_manager.close_by_username(target_username)
+            except Exception:
+                pass
     return RedirectResponse("/admin/users", status_code=302)
 
 
 @app.get("/admin/topics", response_class=HTMLResponse)
 async def admin_topics(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -912,8 +1070,10 @@ async def admin_topics(request: Request, token: str = Cookie(None)):
 @app.post("/admin/topic/{topic_id}/approve")
 async def admin_approve_topic(topic_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -947,8 +1107,10 @@ async def admin_approve_topic(topic_id: int, token: str = Cookie(None)):
 @app.post("/admin/topic/{topic_id}/delete")
 async def admin_delete_topic(topic_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -960,8 +1122,10 @@ async def admin_delete_topic(topic_id: int, token: str = Cookie(None)):
 @app.get("/admin/reports", response_class=HTMLResponse)
 async def admin_reports(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn: 
         cur = conn.cursor()
@@ -985,8 +1149,10 @@ async def admin_reports(request: Request, token: str = Cookie(None)):
 @app.post("/admin/report/{report_id}/handle")
 async def admin_handle_report(report_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1030,8 +1196,10 @@ async def admin_handle_report(report_id: int, token: str = Cookie(None)):
 @app.get("/admin/inbox", response_class=HTMLResponse)
 async def admin_inbox(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username or not is_admin(username):
-        return RedirectResponse("/", status_code=302)
+    if not username or is_banned(username) or not is_admin(username):
+        resp = RedirectResponse("/", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn: 
         cur = conn.cursor()
@@ -1058,34 +1226,36 @@ async def admin_inbox(request: Request, token: str = Cookie(None)):
 
 
 @app.post("/register")
-async def register(username: str = Form(), password: str = Form()):
+async def register(request: Request, username: str = Form(), password: str = Form()):
     if len(password) > 50:
-        return HTMLResponse("密码太长啦，请不要超过 50 个字符。<a href='/register'>返回</a>", status_code=400)
+        return render_error(request, "密码太长啦，请不要超过 50 个字符。", back_url="/register", status_code=400)
 
-    with get_db_conn() as conn:
-        cur = conn.cursor()
-        hashed = pwd_context.hash(password)
-        try:
+    hashed = pwd_context.hash(password)
+    try:
+        with get_db_conn() as conn:
+            cur = conn.cursor()
             cur.execute(
                 "INSERT INTO users (username, password) VALUES (%s, %s)",
                 (username, hashed),
             )
-            return RedirectResponse("/login", status_code=302)
-        except pymysql.err.IntegrityError:
-            return HTMLResponse("用户名已存在，请换一个。<a href='/register'>返回</a>", status_code=400)
+            conn.commit()
+        return RedirectResponse("/login", status_code=302)
+    except pymysql.err.IntegrityError:
+        return render_error(request, "用户名已存在，请换一个。", back_url="/register", status_code=400)
 
 
 @app.post("/login")
-async def login(username: str = Form(), password: str = Form()):
+async def login(request: Request, username: str = Form(), password: str = Form()):
     with get_db_conn() as conn:
         cur = conn.cursor()
         cur.execute("SELECT password, is_banned FROM users WHERE username = %s", (username,))
         row = cur.fetchone()
+
     if not row or not pwd_context.verify(password, row[0]):
-        return HTMLResponse("用户不存在或密码错误。<a href='/login'>返回</a>", status_code=400)
+        return render_error(request, "用户不存在或密码错误。", back_url="/login", status_code=400)
 
     if row[1] == 1:
-        return HTMLResponse("此账号已被封禁，请联系管理员。", status_code=403)
+        return render_error(request, "此账号已被封禁，请联系管理员。", back_url="/", status_code=403)
 
     token = create_token(username)
     resp = RedirectResponse("/", status_code=302)
@@ -1099,8 +1269,10 @@ async def login(username: str = Form(), password: str = Form()):
 @app.get("/post/new", response_class=HTMLResponse)
 async def new_post_page(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1128,12 +1300,16 @@ async def new_post(
     token: str = Cookie(None),
 ):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1160,8 +1336,10 @@ async def new_post(
 @app.get("/topic/new", response_class=HTMLResponse)
 async def new_topic_page(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
     return templates.TemplateResponse(
         "new_topic.html",
         {"request": request, "username": username}
@@ -1171,12 +1349,16 @@ async def new_topic_page(request: Request, token: str = Cookie(None)):
 @app.post("/topic/new")
 async def new_topic(name: str = Form(), description: str = Form(""), token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     name = name.strip()
     if not name:
@@ -1335,12 +1517,16 @@ async def post_detail(post_id: int, request: Request, token: str = Cookie(None))
 @app.post("/post/{post_id}/like")
 async def like_post(post_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     now = datetime.utcnow()
 
@@ -1380,8 +1566,10 @@ async def like_post(post_id: int, token: str = Cookie(None)):
 @app.post("/api/post/{post_id}/like")
 async def api_like_post(post_id: int, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return JSONResponse({"error": "not_logged_in"}, status_code=401)
+    if not username or is_banned(username):
+        resp = JSONResponse({"error": "not_logged_in"}, status_code=401)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
@@ -1438,12 +1626,16 @@ async def report_post(
     token: str = Cookie(None),
 ):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     reporter_id = get_user_id(username)
     if not reporter_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     now = datetime.utcnow()
 
@@ -1473,12 +1665,16 @@ async def report_comment(
     token: str = Cookie(None),
 ):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     reporter_id = get_user_id(username)
     if not reporter_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     now = datetime.utcnow()
 
@@ -1505,12 +1701,16 @@ async def report_comment(
 @app.post("/comment")
 async def add_comment(post_id: int = Form(), content: str = Form(), token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     user_id = get_user_id(username)
     if not user_id:
-        return RedirectResponse("/login", status_code=302)
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1551,14 +1751,54 @@ async def add_comment(post_id: int = Form(), content: str = Form(), token: str =
     return RedirectResponse(f"/post/{post_id}", status_code=302)
 
 
+@app.post("/comment/{comment_id}/delete")
+async def delete_comment(comment_id: int, post_id: int = Form(...), token: str = Cookie(None)):
+    """
+    允许评论作者本人或管理员软删除评论（is_deleted=1），删除后回到帖子详情。
+    """
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    current_user_id = get_user_id(username)
+    if not current_user_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        # 查评论信息
+        cur.execute("SELECT user_id, is_deleted FROM comments WHERE id = %s", (comment_id,))
+        row = cur.fetchone()
+        if not row or row[1] == 1:
+            return HTMLResponse("评论不存在或已被删除。<a href='/'>返回首页</a>", status_code=404)
+
+        comment_user_id, _ = row
+
+        # 权限：作者本人或管理员
+        if current_user_id != comment_user_id and not is_admin(username):
+            return HTMLResponse("你没有权限删除这条评论。<a href='/'>返回首页</a>", status_code=403)
+
+        # 软删除
+        cur.execute("UPDATE comments SET is_deleted = 1 WHERE id = %s", (comment_id,))
+        conn.commit()
+
+    return RedirectResponse(f"/post/{post_id}", status_code=302)
+
+
 # ================== 帖子编辑 ==================
 
 
 @app.get("/post/{post_id}/edit", response_class=HTMLResponse)
 async def edit_post_page(post_id: int, request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1593,8 +1833,10 @@ async def edit_post_page(post_id: int, request: Request, token: str = Cookie(Non
 @app.post("/post/{post_id}/edit")
 async def edit_post(post_id: int, title: str = Form(), content: str = Form(), token: str = Cookie(None)):
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1628,8 +1870,10 @@ async def delete_post(post_id: int, token: str = Cookie(None)):
     删除后重定向回首页。
     """
     username = get_username_from_token(token)
-    if not username:
-        return RedirectResponse("/login", status_code=302)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
 
     with get_db_conn() as conn:
         cur = conn.cursor()
@@ -1643,7 +1887,9 @@ async def delete_post(post_id: int, token: str = Cookie(None)):
         post_user_id, _ = row
         current_user_id = get_user_id(username)
         if not current_user_id:
-            return RedirectResponse("/login", status_code=302)
+            resp = RedirectResponse("/login", status_code=302)
+            resp.delete_cookie("token")
+            return resp
 
         # 权限：作者本人或管理员
         if current_user_id != post_user_id and not is_admin(username):

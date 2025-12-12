@@ -1,0 +1,32 @@
+<!-- 顶部导航（通用） -->
+<div class="flex justify-between items-center mb-8">
+  <div>
+    {% if not (hide_back is defined and hide_back) %}
+      <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+    {% endif %}
+    <h1 class="text-3xl font-bold text-orange-300">MyMiniReddit</h1>
+    <p class="text-sm text-slate-400 mt-1">一个可以发帖、评论、实时聊天的小社区</p>
+  </div>
+  <div class="space-x-3">
+    {% if username %}
+      <span class="text-sm opacity-80">已登录：{{ username }}</span>
+      {% if is_admin %}
+        <a href="/admin/inbox" class="px-3 py-1 bg-amber-500/80 rounded text-sm font-semibold">管理中心</a>
+        <a href="/admin/users" class="px-3 py-1 bg-slate-700 rounded text-sm text-amber-200">用户管理</a>
+      {% endif %}
+      <a href="/search" class="px-3 py-1 bg-slate-800 rounded text-sm">搜索</a>
+      <a href="/notifications" class="px-3 py-1 bg-slate-800 rounded text-sm">
+        通知
+        {% if unread_count and unread_count > 0 %}
+          <span class="ml-1 text-xs text-emerald-400">({{ unread_count }})</span>
+        {% endif %}
+      </a>
+      <a href="/settings" class="px-3 py-1 bg-slate-800 rounded text-sm">设置</a>
+      <a href="/post/new" class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">发帖</a>
+      <a href="/logout" class="px-3 py-1 bg-slate-700 rounded text-sm">退出</a>
+    {% else %}
+      <a href="/login" class="px-3 py-1 bg-sky-500 rounded text-sm font-semibold">登录</a>
+      <a href="/register" class="px-3 py-1 bg-emerald-500 rounded text-sm font-semibold">注册</a>
+    {% endif %}
+  </div>
+</div>

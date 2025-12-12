@@ -8,44 +8,7 @@
 <body class="bg-slate-900 text-slate-100 min-h-screen">
 <div class="max-w-3xl mx-auto py-8">
 
-    <!-- 顶部导航 -->
-    <div class="flex justify-between items-center mb-4">
-        <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
-
-        <div class="space-x-3 text-sm">
-            {% if username %}
-                <span class="opacity-80">当前登录：{{ username }}</span>
-
-                <a href="/notifications"
-                   class="px-3 py-1 bg-slate-800 rounded">
-                    通知
-                    {% if unread_count and unread_count > 0 %}
-                        <span class="ml-1 text-xs text-emerald-400">
-                            ({{ unread_count }})
-                        </span>
-                    {% endif %}
-                </a>
-
-                <a href="/settings"
-                   class="px-3 py-1 bg-slate-800 rounded">
-                    设置
-                </a>
-                <a href="/logout"
-                   class="px-3 py-1 bg-slate-700 rounded">
-                    退出
-                </a>
-            {% else %}
-                <a href="/login"
-                   class="px-3 py-1 bg-sky-500 rounded font-semibold">
-                    登录
-                </a>
-                <a href="/register"
-                   class="px-3 py-1 bg-emerald-500 rounded font-semibold">
-                    注册
-                </a>
-            {% endif %}
-        </div>
-    </div>
+    {% include "_navbar.html" %}
 
     <!-- 帖子内容 -->
     <article class="mt-2 bg-slate-800/80 rounded-xl p-5">
@@ -131,20 +94,23 @@
                                 {{ c[3] }} · {{ c[2].strftime('%Y-%m-%d %H:%M') if c[2] else '' }}
                             </div>
                             <div class="flex items-center gap-2">
-                                {% if is_admin %}
+                                {# 管理员 或 评论作者 本人 才能看到删评按钮 #}
+                                {% if username and (is_admin or username == c[3]) %}
+                                    {# 管理员走 admin 接口，普通作者走通用接口，两者都可以用通用接口，这里我们统一用新的 /comment/{id}/delete #}
                                     <form method="post"
-                                          action="/admin/comment/{{ c[0] }}/delete"
-                                          onsubmit="return confirm('确定要删除这条评论吗？');">
+                                        action="/comment/{{ c[0] }}/delete"
+                                        onsubmit="return confirm('确定要删除这条评论吗？');">
                                         <input type="hidden" name="post_id" value="{{ post.id }}">
                                         <button class="text-xs text-red-400 border border-red-500/50 px-2 py-1 rounded hover:bg-red-500/20">
                                             删评
                                         </button>
                                     </form>
                                 {% endif %}
+
                                 {% if username %}
                                     <form method="post"
-                                          action="/report/comment/{{ c[0] }}"
-                                          onsubmit="return confirm('确定要举报这条评论吗？');">
+                                        action="/report/comment/{{ c[0] }}"
+                                        onsubmit="return confirm('确定要举报这条评论吗？');">
                                         <input type="hidden" name="post_id" value="{{ post.id }}">
                                         <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded hover:bg-amber-500/20">
                                             举报
