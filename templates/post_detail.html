@@ -2,11 +2,12 @@
 <html lang="zh">
 <head>
     <meta charset="utf-8">
-    <title>{{ post.title }} - MyMiniReddit</title>
+    <title>{{ post.title }} - Greennit</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>html{visibility:hidden}</style>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-<div class="max-w-3xl mx-auto py-8">
+<div class="max-w-6xl mx-auto px-4 py-8">
 
     {% include "_navbar.html" %}
 
@@ -43,6 +44,14 @@
                 <a href="/user/{{ post.username }}" class="text-sky-400 hover:underline">
                     {{ post.username }}
                 </a>
+                                {% if username and username != post.username %}
+                                    <a href="/messages/{{ post.username }}" title="发消息" class="ml-2 text-slate-300 hover:text-emerald-300">
+                                        <!-- message icon -->
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block" viewBox="0 0 20 20" fill="currentColor">
+                                            <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v8a2 2 0 01-2 2H6l-4 4V5z" />
+                                        </svg>
+                                    </a>
+                                {% endif %}
                 ·
                 {{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else post.created_at }}
                 <span class="ml-2 text-emerald-300 text-xs">
@@ -243,6 +252,7 @@
         });
     }
 </script>
+<script>document.documentElement.style.visibility='visible'</script>
 
 </body>
 </html>

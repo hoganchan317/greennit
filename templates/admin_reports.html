@@ -2,11 +2,11 @@
 <html lang="zh">
 <head>
     <meta charset="utf-8">
-    <title>举报管理 - MyMiniReddit</title>
+    <title>举报管理 - Greennit</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-<div class="max-w-5xl mx-auto py-8">
+<div class="max-w-6xl mx-auto px-4 py-8">
     <div class="flex justify-between items-center mb-6">
         <a href="/admin/inbox" class="text-slate-400 text-sm">&larr; 返回管理中心</a>
         <div class="text-sm opacity-80">管理员：{{ username }}</div>
@@ -31,29 +31,38 @@
         <tr class="border-t border-slate-700/60">
             <td class="px-4 py-2">{{ r[0] }}</td>
             <td class="px-4 py-2">
-            {% if r[1] == 'post' %}帖子{% else %}评论{% endif %}
+            {% if r[1] == 'user' %}用户举报
+            {% elif r[1] == 'post' %}帖子举报
+            {% else %}评论举报
+            {% endif %}
             </td>
             <td class="px-4 py-2">
-            {% if r[1] == 'post' %}
-                <a href="/post/{{ r[2] }}" class="text-sky-400 hover:underline">
-                查看帖子 #{{ r[2] }}
-                </a>
-            {% else %}
-                <!-- 对评论举报，我们跳到帖子页，由你自己在页面里看 -->
+                        {% if r[1] == 'user' %}
+                                <span class="text-red-400">用户举报</span>
+                                {% if r[7] %}
+                                    <a href="/user/{{ r[7] }}" class="text-sky-400 hover:underline">查看用户：{{ r[7] }}</a>
+                                    {% if r[6] %}
+                                        <a href="/admin/messages/{{ r[6] }}/{{ r[7] }}" class="text-amber-400 hover:underline ml-2 text-xs">[查看聊天记录]</a>
+                                    {% endif %}
+                                {% else %}
+                                    用户已删除 (ID: {{ r[2] }})
+                                {% endif %}
+            {% elif r[1] == 'post' %}
+                <span class="text-amber-400">帖子举报</span>
+                <a href="/post/{{ r[2] }}" class="text-sky-400 hover:underline">查看帖子</a>
+            {% elif r[1] == 'comment' %}
+                <span class="text-orange-400">评论举报</span>
                 评论 ID: {{ r[2] }}
             {% endif %}
             </td>
-            <td class="px-4 py-2">{{ r[3] }}</td>
-            <td class="px-4 py-2 text-slate-300 whitespace-pre-wrap">{{ r[4] or '' }}</td>
+            <td class="px-4 py-2">{{ r[6] }}</td>
+            <td class="px-4 py-2 text-slate-300 whitespace-pre-wrap">{{ r[3] or '' }}</td>
             <td class="px-4 py-2">
-            {{ r[6].strftime('%Y-%m-%d %H:%M') if r[6] else '' }}
+            {{ r[5].strftime('%Y-%m-%d %H:%M') if r[5] else '' }}
             </td>
             <td class="px-4 py-2">
-            <form method="post" action="/admin/report/{{ r[0] }}/handle"
-                    onsubmit="return confirm('确定已处理这个举报吗？');">
-                <button class="px-3 py-1 bg-emerald-500/80 hover:bg-emerald-500 rounded text-xs">
-                标记为已处理
-                </button>
+            <form method="post" action="/admin/report/{{ r[0] }}/handle" onsubmit="return confirm('确定已处理这个举报吗？');">
+                <button class="px-3 py-1 bg-emerald-500/80 hover:bg-emerald-500 rounded text-xs">标记为已处理</button>
             </form>
             </td>
         </tr>

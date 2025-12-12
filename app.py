@@ -108,13 +108,65 @@ class CommentManager:
 
 comment_manager = CommentManager()
 
+# ================== 私信（实时聊天）管理 ==================
+
+
+class ChatManager:
+    def __init__(self):
+        # key: username -> list[WebSocket]
+        self.connections: dict[str, list[WebSocket]] = {}
+        # websocket -> username
+        self.ws_to_username: dict[WebSocket, str] = {}
+
+    async def connect(self, websocket: WebSocket, username: str):
+        await websocket.accept()
+        self.connections.setdefault(username, []).append(websocket)
+        self.ws_to_username[websocket] = username
+
+    def disconnect(self, websocket: WebSocket):
+        username = self.ws_to_username.get(websocket)
+        if username and websocket in self.connections.get(username, []):
+            self.connections[username].remove(websocket)
+        if websocket in self.ws_to_username:
+            try:
+                del self.ws_to_username[websocket]
+            except KeyError:
+                pass
+
+    async def broadcast_to_user(self, username: str, message: dict):
+        conns = self.connections.get(username, [])
+        for ws in list(conns):
+            try:
+                await ws.send_text(json.dumps(message, ensure_ascii=False))
+            except Exception:
+                pass
+
+    async def broadcast_to_users(self, usernames: list, message: dict):
+        for u in usernames:
+            await self.broadcast_to_user(u, message)
+
+    async def close_by_username(self, username: str):
+        conns = list(self.connections.get(username, []))
+        for ws in conns:
+            try:
+                await ws.close()
+            except Exception:
+                pass
+            try:
+                self.disconnect(ws)
+            except Exception:
+                pass
+
+
+chat_manager = ChatManager()
+
 # ================== MySQL 直连配置（pymysql） ==================
 
 DB_USER = os.environ.get("DB_USER", "root")
 DB_PASS = os.environ.get("DB_PASS", "Hhaazzeell602")  # 本地默认密码
 DB_HOST = os.environ.get("DB_HOST", "localhost")
 DB_PORT = int(os.environ.get("DB_PORT", "3306"))
-DB_NAME = os.environ.get("DB_NAME", "myminireddit")
+DB_NAME = os.environ.get("DB_NAME", "greennit")
 
 def get_db_conn():
     return pymysql.connect(
@@ -144,9 +196,9 @@ CREATE TABLE IF NOT EXISTS users (
 """)
 
 _schema_cur.execute("""
-CREATE TABLE IF NOT EXISTS posts (
+CREATE TABLE IF NOT EXISTS reports (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    user_id INT,
+    type ENUM('post', 'comment', 'user') NOT NULL,
     title VARCHAR(200),
     content TEXT,
     created_at DATETIME,
@@ -331,16 +383,142 @@ def get_unread_notifications_count(user_id: int) -> int:
     return row[0] if row else 0
 
 
+def get_unread_messages_count(user_id: int) -> int:
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT COUNT(*) FROM private_messages WHERE receiver_id = %s AND is_read = 0", (user_id,))
+        row = cur.fetchone()
+    return row[0] if row else 0
+
+
+def get_conversations(user_id: int) -> list:
+    """Return list of conversations for user_id.
+    Each conversation is a dict: {other_id, other_username, last_message, last_at, unread_count}
+    """
+    conv_map: dict[int, dict] = {}
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, sender_id, receiver_id, content, is_read, created_at FROM private_messages "
+            "WHERE sender_id = %s OR receiver_id = %s "
+            "ORDER BY created_at ASC",
+            (user_id, user_id),
+        )
+        rows = cur.fetchall()
+
+    for r in rows:
+        pm_id, sender_id, receiver_id, content, is_read, created_at = r
+        other_id = receiver_id if sender_id == user_id else sender_id
+        # initialize
+        item = conv_map.get(other_id)
+        if not item:
+            conv_map[other_id] = {
+                "other_id": other_id,
+                "last_message": content,
+                "last_at": created_at,
+                "unread_count": 0,
+            }
+        else:
+            # since ordered asc, later rows replace
+            conv_map[other_id]["last_message"] = content
+            conv_map[other_id]["last_at"] = created_at
+
+    # compute unread counts and usernames
+    results = []
+    if conv_map:
+        other_ids = list(conv_map.keys())
+        # fetch usernames
+        id_to_username = {}
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            # build placeholder list
+            placeholders = ",".join(["%s"] * len(other_ids))
+            cur.execute(f"SELECT id, username FROM users WHERE id IN ({placeholders})", tuple(other_ids))
+            for row in cur.fetchall():
+                id_to_username[row[0]] = row[1]
+
+            # fetch unread counts per other_id
+            for other_id, item in conv_map.items():
+                cur.execute(
+                    "SELECT COUNT(*) FROM private_messages WHERE receiver_id = %s AND sender_id = %s AND is_read = 0",
+                    (user_id, other_id),
+                )
+                unread_count = cur.fetchone()[0]
+                results.append({
+                    "other_id": other_id,
+                    "other_username": id_to_username.get(other_id, "<deleted>"),
+                    "last_message": item["last_message"],
+                    "last_at": item["last_at"],
+                    "unread_count": unread_count,
+                })
+
+    # sort by last_at desc
+    results.sort(key=lambda x: x["last_at"] or datetime.min, reverse=True)
+    return results
+
+
+def get_messages(user1_id: int, user2_id: int) -> list:
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT p.id, p.sender_id, p.receiver_id, p.content, p.is_read, p.created_at, u.username "
+            "FROM private_messages p JOIN users u ON p.sender_id = u.id "
+            "WHERE (p.sender_id = %s AND p.receiver_id = %s) OR (p.sender_id = %s AND p.receiver_id = %s) "
+            "ORDER BY p.created_at ASC",
+            (user1_id, user2_id, user2_id, user1_id),
+        )
+        rows = cur.fetchall()
+    msgs = []
+    for r in rows:
+        pm_id, sender_id, receiver_id, content, is_read, created_at, sender_username = r
+        msgs.append({
+            "id": pm_id,
+            "sender_id": sender_id,
+            "receiver_id": receiver_id,
+            "sender_username": sender_username,
+            "content": content,
+            "is_read": is_read,
+            "created_at": created_at,
+        })
+    return msgs
+
+
 def render_error(request: Request, message: str, back_url: Optional[str] = None, status_code: int = 400):
-    return templates.TemplateResponse(
-        "error.html",
-        {
-            "request": request,
-            "message": message,
-            "back_url": back_url,
-        },
-        status_code=status_code,
-    )
+    # Build a minimal nav-aware context so the navbar can render consistently
+    token = request.cookies.get("token") if hasattr(request, "cookies") else None
+    username = get_username_from_token(token)
+    user_id = get_user_id(username) if username and not is_banned(username) else None
+    unread_cnt = get_unread_notifications_count(user_id) if user_id else 0
+    msg_unread = get_unread_messages_count(user_id) if user_id else 0
+    is_admin_flag = is_admin(username) if username else False
+    ctx = {
+        "request": request,
+        "message": message,
+        "back_url": back_url,
+        "username": username,
+        "unread_count": unread_cnt,
+        "message_unread_count": msg_unread,
+        "is_admin": is_admin_flag,
+    }
+    return templates.TemplateResponse("error.html", ctx, status_code=status_code)
+
+
+def _nav_context_from_request(request: Request) -> dict:
+    token = request.cookies.get("token") if hasattr(request, "cookies") else None
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        return {"username": username, "unread_count": 0, "message_unread_count": 0, "is_admin": False}
+    user_id = get_user_id(username)
+    unread_cnt = get_unread_notifications_count(user_id) if user_id else 0
+    msg_unread = get_unread_messages_count(user_id) if user_id else 0
+    return {"username": username, "unread_count": unread_cnt, "message_unread_count": msg_unread, "is_admin": is_admin(username)}
+
+
+def _inject_nav(request: Request, ctx: dict) -> dict:
+    base = _nav_context_from_request(request)
+    # allow explicit ctx to override base
+    base.update(ctx or {})
+    return base
 
 
 # ================== 页面路由：首页 / 登录 / 注册 / 退出 ==================
@@ -418,18 +596,16 @@ async def home(
 
     return templates.TemplateResponse(
         "index.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
             "posts": posts,
             "topics": topics,
-            "is_admin": admin_flag,
             "page": page,
             "total_pages": total_pages,
             "has_prev": has_prev,
             "has_next": has_next,
             "top_posts": top_posts,
-        },
+        }),
     )
 
 
@@ -554,10 +730,8 @@ async def search_page(
 
     return templates.TemplateResponse(
         "search.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
-            "is_admin": admin_flag,
             "q": keyword,
             "scope": scope,
             "results": results,
@@ -565,18 +739,18 @@ async def search_page(
             "total_pages": total_pages,
             "has_prev": has_prev,
             "has_next": has_next,
-        },
+        }),
     )
 
 
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
-    return templates.TemplateResponse("login.html", {"request": request})
+    return templates.TemplateResponse("login.html", _inject_nav(request, {"request": request}))
 
 
 @app.get("/register", response_class=HTMLResponse)
 async def register_page(request: Request):
-    return templates.TemplateResponse("register.html", {"request": request})
+    return templates.TemplateResponse("register.html", _inject_nav(request, {"request": request}))
 
 
 @app.get("/logout")
@@ -608,13 +782,12 @@ async def settings_page(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "settings.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
             "user_id": user_id,
-            "is_admin": bool(user_is_admin),
             "is_banned": bool(user_is_banned),
-        },
+            "is_admin": bool(user_is_admin),
+        }),
     )
 
 
@@ -706,16 +879,15 @@ async def user_profile(username: str, request: Request, token: str = Cookie(None
 
     return templates.TemplateResponse(
         "user_profile.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": current_username,   # 当前登录用户
-            "profile_username": username,   # 正在查看的用户
+            "profile_username": username,
             "profile_user_id": user_id,
             "profile_is_admin": bool(user_is_admin),
             "profile_is_banned": bool(user_is_banned),
             "posts": posts_with_likes,
             "current_is_admin": current_is_admin,
-        },
+        }),
     )
 
 
@@ -765,17 +937,16 @@ async def user_comments(username: str, request: Request, token: str = Cookie(Non
 
     return templates.TemplateResponse(
         "user_comments.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": current_username,    # 当前登录用户
-            "profile_username": username,    # 正在查看的用户
+            "profile_username": username,
             "profile_user_id": user_id,
             "profile_is_admin": bool(user_is_admin),
             "profile_is_banned": bool(user_is_banned),
             "comments": comments,
             "current_is_admin": current_is_admin,
             "unread_count": unread_count,
-        },
+        }),
     )
 
 
@@ -834,17 +1005,16 @@ async def user_likes(username: str, request: Request, token: str = Cookie(None))
 
     return templates.TemplateResponse(
         "user_likes.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": current_username,    # 当前登录用户
-            "profile_username": username,    # 正在查看的用户
+            "profile_username": username,
             "profile_user_id": user_id,
             "profile_is_admin": bool(user_is_admin),
             "profile_is_banned": bool(user_is_banned),
             "likes": likes,
             "current_is_admin": current_is_admin,
             "unread_count": unread_count,
-        },
+        }),
     )
 
 
@@ -899,12 +1069,11 @@ async def notifications_page(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "notifications.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
             "notifications": rows,
             "unread_count": unread_count,
-        },
+        }),
     )
 
 
@@ -927,6 +1096,297 @@ async def notifications_read_all(token: str = Cookie(None)):
         cur.execute("UPDATE notifications SET is_read = 1 WHERE user_id = %s AND is_read = 0", (user_id,))
         conn.commit()
     return RedirectResponse("/notifications", status_code=302)
+
+
+# ================== 私信路由：聊天列表 / 新对话 / 聊天页 / 发送消息 ==================
+
+
+@app.get("/messages", response_class=HTMLResponse)
+async def messages_list(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    if not user_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    convs = get_conversations(user_id)
+    unread_msgs_total = get_unread_messages_count(user_id)
+    unread_notifs = get_unread_notifications_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse(
+        "message_list.html",
+        _inject_nav(request, {
+            "request": request,
+            "conversations": convs,
+        }),
+    )
+
+
+@app.get("/messages/new", response_class=HTMLResponse)
+async def new_message_page(request: Request, q: Optional[str] = Query(None), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    if not user_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    unread_msgs_total = get_unread_messages_count(user_id)
+    unread_notifs = get_unread_notifications_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    users = []
+    if q:
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            like_pattern = f"%{q}%"
+            cur.execute(
+                "SELECT id, username, is_admin FROM users WHERE username LIKE %s AND username != %s AND is_banned = 0 LIMIT 20",
+                (like_pattern, username),
+            )
+            rows = cur.fetchall()
+        for r in rows:
+            uid, uname, is_admin_flag_row = r
+            users.append({"id": uid, "username": uname, "is_admin": bool(is_admin_flag_row)})
+
+    return templates.TemplateResponse(
+        "new_chat.html",
+        _inject_nav(request, {
+            "request": request,
+            "q": q,
+            "users": users,
+        }),
+    )
+
+
+@app.post("/messages/new", response_class=HTMLResponse)
+async def new_message_submit(request: Request, target_username: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    if not user_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    if target_username == username:
+        return render_error(request, "不能和自己聊天。", back_url="/messages/new", status_code=400)
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s AND is_banned = 0", (target_username,))
+        row = cur.fetchone()
+        if not row:
+            return render_error(request, "对方用户不存在。", back_url="/messages/new", status_code=404)
+
+    return RedirectResponse(f"/messages/{target_username}", status_code=302)
+
+
+@app.get("/messages/{other_username}", response_class=HTMLResponse)
+async def chat_page(other_username: str, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    if not user_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s", (other_username,))
+        row = cur.fetchone()
+        if not row:
+            return render_error(request, "对方用户不存在。", back_url="/messages", status_code=404)
+        other_id = row[0]
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE private_messages SET is_read = 1 WHERE receiver_id = %s AND sender_id = %s AND is_read = 0",
+            (user_id, other_id),
+        )
+        conn.commit()
+
+    msgs = get_messages(user_id, other_id)
+    unread_msgs_total = get_unread_messages_count(user_id)
+    unread_notifs = get_unread_notifications_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse(
+        "chat.html",
+        _inject_nav(request, {
+            "request": request,
+            "other_username": other_username,
+            "current_user_id": user_id,
+            "messages": msgs,
+        }),
+    )
+
+
+@app.get("/report/user/{target_username}", response_class=HTMLResponse)
+async def report_user_page(target_username: str, request: Request, token: str = Cookie(None)):
+    # 1. 验证登录
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    # 2. 不能举报自己
+    if username == target_username:
+        return render_error(request, "不能举报自己。", "/messages")
+
+    # 3. 检查目标用户存在
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, is_admin FROM users WHERE username = %s", (target_username,))
+        row = cur.fetchone()
+
+    if not row:
+        return render_error(request, "用户不存在。", "/messages")
+
+    # 4. 不能举报管理员
+    if row[1]:
+        return render_error(request, "不能举报管理员。", "/messages")
+
+    # 5. 获取 navbar 需要的变量
+    user_id = get_user_id(username)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    # 6. 渲染模板
+    return templates.TemplateResponse("report_user.html", _inject_nav(request, {
+        "request": request,
+        "username": username,
+        "target_username": target_username,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    }))
+
+
+@app.post("/report/user/{target_username}", response_class=HTMLResponse)
+async def report_user_submit(target_username: str, request: Request, reason: str = Form(...), token: str = Cookie(None)):
+    # 1. 验证登录
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    # 2. 不能举报自己
+    if username == target_username:
+        return render_error(request, "不能举报自己。", "/messages")
+
+    # 3. 获取举报者 ID
+    reporter_id = get_user_id(username)
+    if not reporter_id:
+        return render_error(request, "用户不存在。", "/messages")
+
+    # 4. 检查目标用户存在且不是管理员
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, is_admin FROM users WHERE username = %s", (target_username,))
+        row = cur.fetchone()
+
+    if not row:
+        return render_error(request, "用户不存在。", "/messages")
+
+    if row[1]:
+        return render_error(request, "不能举报管理员。", "/messages")
+
+    target_id = row[0]
+
+    # 5. 检查是否已经举报过（避免重复举报）
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM reports WHERE type = 'user' AND target_id = %s AND reporter_id = %s AND status = 'pending'",
+            (target_id, reporter_id)
+        )
+        existing = cur.fetchone()
+
+    if existing:
+        return render_error(request, "你已经举报过该用户，请等待处理。", f"/messages/{target_username}")
+
+    # 6. 插入举报记录
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO reports (type, target_id, reporter_id, reason, status, created_at) VALUES ('user', %s, %s, %s, 'pending', NOW())",
+            (target_id, reporter_id, reason)
+        )
+        conn.commit()
+
+    # 7. 重定向回聊天页面
+    return RedirectResponse(f"/messages/{target_username}", status_code=302)
+
+
+@app.post("/messages/{other_username}/send")
+async def send_message(request: Request, other_username: str, content: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    sender_id = get_user_id(username)
+    if not sender_id:
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s", (other_username,))
+        row = cur.fetchone()
+        if not row:
+            return render_error(request, "接收者不存在。", back_url="/messages", status_code=404)
+        receiver_id = row[0]
+
+        now = datetime.utcnow()
+        cur.execute(
+            "INSERT INTO private_messages (sender_id, receiver_id, content, is_read, created_at) VALUES (%s, %s, %s, 0, %s)",
+            (sender_id, receiver_id, content, now),
+        )
+        conn.commit()
+
+    message_obj = {
+        "type": "new_message",
+        "from": username,
+        "to": other_username,
+        "content": content,
+        "created_at": now.strftime("%Y-%m-%d %H:%M"),
+    }
+    try:
+        await chat_manager.broadcast_to_users([username, other_username], message_obj)
+    except Exception:
+        pass
+
+    return RedirectResponse(f"/messages/{other_username}", status_code=302)
+
 
 
 # ================== WebSocket：评论实时 + 在线人数 + 正在输入 ==================
@@ -956,6 +1416,73 @@ async def comments_websocket(websocket: WebSocket, post_id: int, token: str = Co
         comment_manager.disconnect(websocket, post_id, username)
         await comment_manager.broadcast_online_count(post_id)
         await comment_manager.set_typing(post_id, username, False)
+
+
+@app.websocket("/ws/chat/{other_username}")
+async def chat_websocket(websocket: WebSocket, other_username: str, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        await websocket.close()
+        return
+
+    # verify other exists (optional)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s", (other_username,))
+        row = cur.fetchone()
+        if not row:
+            await websocket.close()
+            return
+
+    await chat_manager.connect(websocket, username)
+
+    try:
+        while True:
+            data_text = await websocket.receive_text()
+            try:
+                data = json.loads(data_text)
+            except Exception:
+                continue
+
+            # expected: {"type":"msg","content":"...","to":"other_username"}
+            if data.get("type") == "msg":
+                content = data.get("content", "").strip()
+                to_user = data.get("to") or other_username
+                if not content:
+                    continue
+
+                sender = username
+
+                # insert into DB
+                sender_id = get_user_id(sender)
+                receiver_id = None
+                with get_db_conn() as conn:
+                    cur = conn.cursor()
+                    cur.execute("SELECT id FROM users WHERE username = %s", (to_user,))
+                    r = cur.fetchone()
+                    if not r:
+                        continue
+                    receiver_id = r[0]
+                    now = datetime.utcnow()
+                    cur.execute(
+                        "INSERT INTO private_messages (sender_id, receiver_id, content, is_read, created_at) VALUES (%s, %s, %s, 0, %s)",
+                        (sender_id, receiver_id, content, now),
+                    )
+                    conn.commit()
+
+                msg_obj = {
+                    "type": "new_message",
+                    "from": sender,
+                    "to": to_user,
+                    "content": content,
+                    "created_at": now.strftime("%Y-%m-%d %H:%M"),
+                }
+                try:
+                    await chat_manager.broadcast_to_users([sender, to_user], msg_obj)
+                except Exception:
+                    pass
+    except WebSocketDisconnect:
+        chat_manager.disconnect(websocket)
 
 
 # ================== 管理员路由：删帖 / 删评 / 用户管理 / 板块管理 / 举报管理 ==================
@@ -1006,7 +1533,7 @@ async def admin_users(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "admin_users.html",
-        {"request": request, "username": username, "users": users},
+        _inject_nav(request, {"request": request, "users": users}),
     )
 
 
@@ -1040,6 +1567,10 @@ async def admin_ban_user(user_id: int, token: str = Cookie(None)):
                 await comment_manager.close_by_username(target_username)
             except Exception:
                 pass
+            try:
+                await chat_manager.close_by_username(target_username)
+            except Exception:
+                pass
     return RedirectResponse("/admin/users", status_code=302)
 
 
@@ -1063,7 +1594,7 @@ async def admin_topics(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "admin_topics.html",
-        {"request": request, "username": username, "topics": topics},
+        _inject_nav(request, {"request": request, "topics": topics}),
     )
 
 
@@ -1130,11 +1661,18 @@ async def admin_reports(request: Request, token: str = Cookie(None)):
     with get_db_conn() as conn: 
         cur = conn.cursor()
 
-        # 查所有未处理的举报
+        # 查所有未处理的举报，并在 type='user' 时 JOIN 出被举报用户的用户名
         cur.execute("""
-            SELECT r.id, r.type, r.target_id, u.username, r.reason, r.status, r.created_at
+            SELECT 
+                r.id, r.type, r.target_id, r.reason, r.status, r.created_at,
+                reporter.username as reporter_username,
+                CASE 
+                    WHEN r.type = 'user' THEN target_user.username
+                    ELSE NULL
+                END as target_username
             FROM reports r
-            JOIN users u ON r.reporter_id = u.id
+            LEFT JOIN users reporter ON r.reporter_id = reporter.id
+            LEFT JOIN users target_user ON r.type = 'user' AND r.target_id = target_user.id
             WHERE r.status = 'pending'
             ORDER BY r.created_at DESC
         """)
@@ -1142,7 +1680,7 @@ async def admin_reports(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "admin_reports.html",
-        {"request": request, "username": username, "reports": reports},
+        _inject_nav(request, {"request": request, "reports": reports}),
     )
 
 
@@ -1193,6 +1731,74 @@ async def admin_handle_report(report_id: int, token: str = Cookie(None)):
     return RedirectResponse("/admin/reports", status_code=302)
 
 
+@app.get("/admin/messages/{user1}/{user2}", response_class=HTMLResponse)
+async def admin_view_chat(user1: str, user2: str, request: Request, token: str = Cookie(None)):
+    # 1. 验证登录
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    # 2. 验证是管理员
+    if not is_admin(username):
+        return render_error(request, "无权限访问。", "/")
+
+    # 3. 获取两个用户的 ID
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM users WHERE username = %s", (user1,))
+        row1 = cur.fetchone()
+        cur.execute("SELECT id FROM users WHERE username = %s", (user2,))
+        row2 = cur.fetchone()
+
+    if not row1 or not row2:
+        return render_error(request, "用户不存在。", "/admin/reports")
+
+    user1_id = row1[0]
+    user2_id = row2[0]
+
+    # 4. 获取两人之间的所有聊天记录
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT pm.id, pm.sender_id, pm.receiver_id, pm.content, pm.created_at,
+                   sender.username as sender_username,
+                   receiver.username as receiver_username
+            FROM private_messages pm
+            JOIN users sender ON pm.sender_id = sender.id
+            JOIN users receiver ON pm.receiver_id = receiver.id
+            WHERE (pm.sender_id = %s AND pm.receiver_id = %s)
+               OR (pm.sender_id = %s AND pm.receiver_id = %s)
+            ORDER BY pm.created_at ASC
+        """, (user1_id, user2_id, user2_id, user1_id))
+        messages = cur.fetchall()
+
+    # 5. 转换为字典列表
+    message_list = []
+    for m in messages:
+        message_list.append({
+            "id": m[0],
+            "sender_id": m[1],
+            "receiver_id": m[2],
+            "content": m[3],
+            "created_at": m[4],
+            "sender_username": m[5],
+            "receiver_username": m[6],
+        })
+
+    # 6. 获取 navbar 变量 (use _inject_nav)
+    ctx = _nav_context_from_request(request)
+    ctx.update({
+        "request": request,
+        "user1": user1,
+        "user2": user2,
+        "messages": message_list,
+    })
+
+    return templates.TemplateResponse("admin_view_chat.html", ctx)
+
+
 @app.get("/admin/inbox", response_class=HTMLResponse)
 async def admin_inbox(request: Request, token: str = Cookie(None)):
     username = get_username_from_token(token)
@@ -1213,12 +1819,11 @@ async def admin_inbox(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "admin_inbox.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
             "pending_topics": pending_topics,
             "pending_reports": pending_reports,
-        },
+        }),
     )
 
 
@@ -1288,7 +1893,7 @@ async def new_post_page(request: Request, token: str = Cookie(None)):
 
     return templates.TemplateResponse(
         "new_post.html",
-        {"request": request, "username": username, "topics": topics},
+        _inject_nav(request, {"request": request, "topics": topics}),
     )
 
 
@@ -1342,7 +1947,7 @@ async def new_topic_page(request: Request, token: str = Cookie(None)):
         return resp
     return templates.TemplateResponse(
         "new_topic.html",
-        {"request": request, "username": username}
+        _inject_nav(request, {"request": request}),
     )
 
 
@@ -1425,17 +2030,15 @@ async def topic_page(
 
     return templates.TemplateResponse(
         "topic_posts.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
-            "is_admin": admin_flag,
-            "topic": topic,   # (id, name)
+            "topic": topic,
             "posts": posts,
             "page": page,
             "total_pages": total_pages,
             "has_prev": has_prev,
             "has_next": has_next,
-        },
+        }),
     )
 
 
@@ -1500,17 +2103,15 @@ async def post_detail(post_id: int, request: Request, token: str = Cookie(None))
 
     return templates.TemplateResponse(
         "post_detail.html",
-        {
+        _inject_nav(request, {
             "request": request,
-            "username": username,
             "post": post,
             "comments": comments,
-            "is_admin": admin_flag,
             "likes_count": likes_count,
             "user_liked": user_like_flag,
             "is_author": is_author,
             "unread_count": unread_count,
-        },
+        }),
     )
 
 
@@ -1826,7 +2427,7 @@ async def edit_post_page(post_id: int, request: Request, token: str = Cookie(Non
 
     return templates.TemplateResponse(
         "edit_post.html",
-        {"request": request, "username": username, "post": post},
+        _inject_nav(request, {"request": request, "post": post}),
     )
 
 

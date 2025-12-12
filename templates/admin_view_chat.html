@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>查看聊天记录 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="flex items-center gap-4 mb-4">
+    <a href="/admin/reports" class="text-slate-400 hover:text-white">← 返回举报管理</a>
+    <h1 class="text-2xl font-bold">聊天记录审查</h1>
+  </div>
+
+  <div class="bg-slate-800/80 rounded-xl p-4 mb-4">
+    <div class="flex gap-4 text-sm">
+      <span>用户 1: <a href="/user/{{ user1 }}" class="text-sky-400 hover:underline">{{ user1 }}</a></span>
+      <span>用户 2: <a href="/user/{{ user2 }}" class="text-sky-400 hover:underline">{{ user2 }}</a></span>
+      <span class="text-slate-400">共 {{ messages|length }} 条消息</span>
+    </div>
+  </div>
+
+  <div class="bg-slate-800/80 rounded-xl p-4">
+    <div class="space-y-3 max-h-[60vh] overflow-y-auto">
+      {% if messages %}
+        {% for m in messages %}
+          <div class="flex {% if m.sender_username == user1 %}justify-start{% else %}justify-end{% endif %}">
+            <div class="rounded-xl p-3 max-w-[70%] {% if m.sender_username == user1 %}bg-slate-700{% else %}bg-emerald-600/80{% endif %}">
+              <div class="text-xs text-slate-400 mb-1">
+                <span class="font-bold {% if m.sender_username == user1 %}text-sky-400{% else %}text-emerald-300{% endif %}">
+                  {{ m.sender_username }}
+                </span>
+                → {{ m.receiver_username }}
+              </div>
+              <div class="text-sm">{{ m.content }}</div>
+              <div class="text-xs text-slate-500 mt-1">
+                {{ m.created_at.strftime('%Y-%m-%d %H:%M:%S') if m.created_at else '' }}
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      {% else %}
+        <div class="text-center text-slate-400 py-6">这两位用户之间没有聊天记录。</div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mt-4 flex gap-3">
+    <a href="/admin/users" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">用户管理</a>
+    <a href="/user/{{ user1 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">查看 {{ user1 }} 资料</a>
+    <a href="/user/{{ user2 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">查看 {{ user2 }} 资料</a>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

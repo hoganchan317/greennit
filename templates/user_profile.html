@@ -2,19 +2,31 @@
 <html lang="zh">
 <head>
     <meta charset="utf-8">
-    <title>{{ profile_username }} 的主页 - MyMiniReddit</title>
+    <title>{{ profile_username }} 的主页 - Greennit</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
 
-    <div class="max-w-4xl mx-auto p-6">
+        <div class="max-w-6xl mx-auto px-4 py-8">
 
         {% include "_navbar.html" %}
 
-    </div>
+        <div class="mt-2">
+            {% if username and username != profile_username %}
+                <a href="/messages/{{ profile_username }}" class="inline-block text-xs px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-600">
+                    发消息
+                </a>
+                                {% if username and username != profile_username and not profile_is_admin %}
+                                    <a href="/report/user/{{ profile_username }}" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-red-500 text-slate-300 hover:text-white ml-2">
+                                        举报此用户
+                                    </a>
+                                {% endif %}
+            {% endif %}
+        </div>
+        </div>
 
-    <!-- 基本信息 -->
-    <section class="mb-8 max-w-4xl mx-auto p-6 pt-0">
+        <!-- 基本信息 -->
+        <section class="mb-8 max-w-6xl mx-auto px-4 py-8 pt-0">
         <h1 class="text-2xl font-bold mb-2">{{ profile_username }} 的主页</h1>
         <div class="bg-slate-800/80 rounded-xl p-4 text-sm space-y-2">
             <p>
@@ -40,7 +52,7 @@
     </section>
 
     <!-- TA 发的帖子 -->
-    <section class="max-w-4xl mx-auto p-6 pt-0">
+    <section class="max-w-6xl mx-auto px-4 py-8 pt-0">
         <h2 class="text-lg font-semibold mb-3">TA 的帖子</h2>
 
         <div class="space-y-4">
