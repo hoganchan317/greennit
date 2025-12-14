@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>会话管理 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <h1 class="text-2xl font-bold mb-4">会话管理</h1>
+  <p class="text-slate-400 mb-6">查看所有登录的设备，可以踢掉可疑的登录。</p>
+
+  {% if sessions|length > 1 %}
+  <div class="mb-4">
+    <form method="post" action="/settings/sessions/revoke_all" onsubmit="return confirm('确定要登出所有其他设备吗？')">
+      <button type="submit" class="px-4 py-2 rounded bg-red-500 hover:bg-red-600 text-sm">
+        登出所有其他设备
+      </button>
+    </form>
+  </div>
+  {% endif %}
+
+  <div class="space-y-3">
+    {% for s in sessions %}
+      <div class="bg-slate-800/80 rounded-xl p-4 {% if s.is_current %}border-2 border-emerald-500{% endif %}">
+        <div class="flex justify-between items-start">
+          <div class="flex-1">
+            <div class="flex items-center gap-2 mb-2">
+              {% if s.is_current %}
+                <span class="text-xs px-2 py-1 rounded bg-emerald-500 text-white">当前设备</span>
+              {% endif %}
+              <span class="text-slate-400 text-xs">IP: {{ s.ip_address }}</span>
+            </div>
+            <div class="text-sm text-slate-300 mb-1">
+              {{ s.device_info[:80] }}{% if s.device_info|length > 80 %}...{% endif %}
+            </div>
+            <div class="text-xs text-slate-500">
+              登录时间: {{ s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else 'N/A' }}
+              · 最后活跃: {{ s.last_active.strftime('%Y-%m-%d %H:%M') if s.last_active else 'N/A' }}
+            </div>
+          </div>
+          {% if not s.is_current %}
+            <form method="post" action="/settings/sessions/{{ s.id }}/revoke" onsubmit="return confirm('确定要登出此设备吗？')">
+              <button type="submit" class="px-3 py-1 rounded bg-red-500 hover:bg-red-600 text-xs">
+                踢下线
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="mt-6">
+    <a href="/settings" class="text-slate-400 hover:text-white">← 返回设置</a>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

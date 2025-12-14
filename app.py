@@ -14,12 +14,43 @@ from typing import Optional
 import pymysql
 import os
 import json
+import uuid
+import secrets
+import string
 
 # ================== 基础配置 ==================
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
+
+
+@app.middleware("http")
+async def check_session_middleware(request: Request, call_next):
+    """Middleware to ensure session token is still active. Public paths are allowed.
+    If session is revoked (is_active = 0) we delete the cookie and redirect to /login.
+    """
+    path = request.url.path
+    # exact public paths
+    public_exact = {"/login", "/register", "/"}
+    # prefix-based public paths
+    public_prefixes = ["/static", "/favicon.ico", "/api/posts"]
+
+    if path in public_exact or any(path.startswith(p) for p in public_prefixes):
+        return await call_next(request)
+
+    token = request.cookies.get("token")
+    if token:
+        try:
+            session_token = get_session_from_token(token)
+        except Exception:
+            session_token = None
+        if session_token and not is_session_valid(session_token):
+            response = RedirectResponse("/login", status_code=302)
+            response.delete_cookie("token")
+            return response
+
+    return await call_next(request)
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = "this_is_a_super_secret_key_change_me"
@@ -160,6 +191,72 @@ class ChatManager:
 
 chat_manager = ChatManager()
 
+
+class GroupChatManager:
+    def __init__(self):
+        # key: group_id -> list[WebSocket]
+        self.connections: dict[int, list[WebSocket]] = {}
+        # websocket -> group_id
+        self.ws_to_group: dict[WebSocket, int] = {}
+        # websocket -> username
+        self.ws_to_username: dict[WebSocket, str] = {}
+
+    async def connect(self, websocket: WebSocket, group_id: int, username: str | None):
+        await websocket.accept()
+        self.connections.setdefault(group_id, []).append(websocket)
+        self.ws_to_group[websocket] = group_id
+        if username:
+            self.ws_to_username[websocket] = username
+        await self.broadcast_online_count(group_id)
+
+    def disconnect(self, websocket: WebSocket):
+        group_id = self.ws_to_group.get(websocket)
+        username = self.ws_to_username.get(websocket)
+        if group_id in self.connections and websocket in self.connections[group_id]:
+            try:
+                self.connections[group_id].remove(websocket)
+            except ValueError:
+                pass
+        if websocket in self.ws_to_group:
+            try:
+                del self.ws_to_group[websocket]
+            except KeyError:
+                pass
+        if websocket in self.ws_to_username:
+            try:
+                del self.ws_to_username[websocket]
+            except KeyError:
+                pass
+
+    async def broadcast_to_group(self, group_id: int, message: dict):
+        conns = self.connections.get(group_id, [])
+        for ws in list(conns):
+            try:
+                await ws.send_text(json.dumps(message, ensure_ascii=False))
+            except Exception:
+                pass
+
+    async def broadcast_online_count(self, group_id: int):
+        count = len(self.connections.get(group_id, []))
+        msg = {"type": "online_count", "count": count}
+        await self.broadcast_to_group(group_id, msg)
+
+    async def close_by_username(self, username: str):
+        items = list(self.ws_to_username.items())
+        for ws, u in items:
+            if u == username:
+                try:
+                    await ws.close()
+                except Exception:
+                    pass
+                try:
+                    self.disconnect(ws)
+                except Exception:
+                    pass
+
+
+group_chat_manager = GroupChatManager()
+
 # ================== MySQL 直连配置（pymysql） ==================
 
 DB_USER = os.environ.get("DB_USER", "root")
@@ -179,84 +276,108 @@ def get_db_conn():
         autocommit=True,
     )
 
-# ================== 建表：users, posts, comments, topics, reports, post_likes, notifications ==================
-
-
+# ============ DATABASE SCHEMA INITIALIZATION ============
 _schema_conn = get_db_conn()
 _schema_cur = _schema_conn.cursor()
 
+# 1. users (基础表，无依赖)
 _schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS users (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    username VARCHAR(50) UNIQUE,
-    password VARCHAR(255),
+    username VARCHAR(50) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
     is_admin TINYINT(1) NOT NULL DEFAULT 0,
-    is_banned TINYINT(1) NOT NULL DEFAULT 0
+    is_banned TINYINT(1) NOT NULL DEFAULT 0,
+    avatar_url VARCHAR(500) NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
+# 2. topics (依赖 users)
 _schema_cur.execute("""
-CREATE TABLE IF NOT EXISTS reports (
+CREATE TABLE IF NOT EXISTS topics (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    type ENUM('post', 'comment', 'user') NOT NULL,
-    title VARCHAR(200),
-    content TEXT,
-    created_at DATETIME,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    created_by INT NOT NULL,
+    is_approved TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (created_by) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 3. forums (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS forums (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(100) UNIQUE NOT NULL,
+    description TEXT,
+    creator_id INT NOT NULL,
+    is_approved TINYINT(1) NOT NULL DEFAULT 0,
+    is_private TINYINT(1) NOT NULL DEFAULT 0,
+    invite_code VARCHAR(20) UNIQUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (creator_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 4. posts (依赖 users, topics, forums)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS posts (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_deleted TINYINT(1) NOT NULL DEFAULT 0,
     topic_id INT NULL,
-    FOREIGN KEY (user_id) REFERENCES users(id)
+    forum_id INT NULL,
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    FOREIGN KEY (topic_id) REFERENCES topics(id),
+    FOREIGN KEY (forum_id) REFERENCES forums(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
+# 5. comments (依赖 posts, users)
 _schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS comments (
     id INT PRIMARY KEY AUTO_INCREMENT,
-    post_id INT,
-    user_id INT,
-    content TEXT,
-    created_at DATETIME,
+    post_id INT NOT NULL,
+    user_id INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     is_deleted TINYINT(1) NOT NULL DEFAULT 0,
     FOREIGN KEY (post_id) REFERENCES posts(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
-_schema_cur.execute("""
-CREATE TABLE IF NOT EXISTS topics (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    name VARCHAR(100) UNIQUE,
-    description TEXT,
-    created_by INT,
-    is_approved TINYINT(1) NOT NULL DEFAULT 0,
-    created_at DATETIME,
-    FOREIGN KEY (created_by) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-""")
-
-_schema_cur.execute("""
-CREATE TABLE IF NOT EXISTS reports (
-    id INT PRIMARY KEY AUTO_INCREMENT,
-    type ENUM('post', 'comment') NOT NULL,
-    target_id INT NOT NULL,
-    reporter_id INT NOT NULL,
-    reason TEXT,
-    status ENUM('pending', 'handled') NOT NULL DEFAULT 'pending',
-    created_at DATETIME,
-    FOREIGN KEY (reporter_id) REFERENCES users(id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-""")
-
+# 6. post_likes (依赖 posts, users)
 _schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS post_likes (
     post_id INT NOT NULL,
     user_id INT NOT NULL,
-    created_at DATETIME,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (post_id, user_id),
     FOREIGN KEY (post_id) REFERENCES posts(id),
     FOREIGN KEY (user_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
+# 7. reports (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS reports (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    type ENUM('post', 'comment', 'user') NOT NULL,
+    target_id INT NOT NULL,
+    reporter_id INT NOT NULL,
+    reason TEXT NOT NULL,
+    status ENUM('pending', 'handled') NOT NULL DEFAULT 'pending',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (reporter_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 8. notifications (依赖 users, posts, comments)
 _schema_cur.execute("""
 CREATE TABLE IF NOT EXISTS notifications (
     id INT PRIMARY KEY AUTO_INCREMENT,
@@ -267,7 +388,7 @@ CREATE TABLE IF NOT EXISTS notifications (
     from_user_id INT NULL,
     message TEXT NOT NULL,
     is_read TINYINT(1) NOT NULL DEFAULT 0,
-    created_at DATETIME NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (user_id) REFERENCES users(id),
     FOREIGN KEY (from_user_id) REFERENCES users(id),
     FOREIGN KEY (related_post_id) REFERENCES posts(id),
@@ -275,10 +396,109 @@ CREATE TABLE IF NOT EXISTS notifications (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 """)
 
+# 9. private_messages (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS private_messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    sender_id INT NOT NULL,
+    receiver_id INT NOT NULL,
+    content TEXT NOT NULL,
+    is_read TINYINT(1) NOT NULL DEFAULT 0,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (sender_id) REFERENCES users(id),
+    FOREIGN KEY (receiver_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 10. user_sessions (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS user_sessions (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    session_token VARCHAR(255) UNIQUE NOT NULL,
+    device_info VARCHAR(500),
+    ip_address VARCHAR(45),
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_active DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 11. chat_groups (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS chat_groups (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    name VARCHAR(200) NOT NULL,
+    description TEXT,
+    avatar_url VARCHAR(500),
+    creator_id INT NOT NULL,
+    invite_code VARCHAR(20) UNIQUE,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (creator_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 12. group_members (依赖 chat_groups, users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS group_members (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    group_id INT NOT NULL,
+    user_id INT NOT NULL,
+    role ENUM('owner', 'admin', 'member') NOT NULL DEFAULT 'member',
+    is_muted TINYINT(1) NOT NULL DEFAULT 0,
+    muted_until DATETIME NULL,
+    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES chat_groups(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 13. group_messages (依赖 chat_groups, users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS group_messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    group_id INT NOT NULL,
+    sender_id INT NOT NULL,
+    content TEXT NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (group_id) REFERENCES chat_groups(id),
+    FOREIGN KEY (sender_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 14. forum_members (依赖 forums, users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS forum_members (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    forum_id INT NOT NULL,
+    user_id INT NOT NULL,
+    role ENUM('owner', 'admin', 'member') NOT NULL DEFAULT 'member',
+    joined_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (forum_id) REFERENCES forums(id),
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
+# 15. forum_requests (依赖 users)
+_schema_cur.execute("""
+CREATE TABLE IF NOT EXISTS forum_requests (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    user_id INT NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    reason TEXT,
+    status ENUM('pending', 'approved', 'rejected') NOT NULL DEFAULT 'pending',
+    admin_reply TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+""")
+
 _schema_conn.commit()
 _schema_cur.close()
 _schema_conn.close()
-
+# ============ END DATABASE SCHEMA ============
 
 # ================== 工具函数：JWT & 用户 ==================
 
@@ -299,6 +519,48 @@ def get_username_from_token(token: Optional[str]) -> Optional[str]:
         return data.get("sub")
     except Exception:
         return None
+
+
+def create_token_with_session(username: str, session_token: str) -> str:
+    expire = datetime.utcnow() + timedelta(days=7)
+    payload = {"sub": username, "session": session_token, "exp": expire}
+    token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
+    if isinstance(token, bytes):
+        token = token.decode("utf-8")
+    return token
+
+
+def get_session_from_token(token: Optional[str]) -> Optional[str]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        return payload.get("session")
+    except Exception:
+        return None
+
+
+def is_session_valid(session_token: Optional[str]) -> bool:
+    if not session_token:
+        return False
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT is_active FROM user_sessions WHERE session_token = %s", (session_token,))
+        row = cur.fetchone()
+    return bool(row and row[0] == 1)
+
+
+def validate_auth(token: Optional[str]) -> tuple[Optional[str], bool]:
+    """返回 (username, is_valid)"""
+    if not token:
+        return None, False
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        return None, False
+    session_token = get_session_from_token(token)
+    if not is_session_valid(session_token):
+        return None, False
+    return username, True
 
 
 def get_user_id(username: str) -> Optional[int]:
@@ -483,6 +745,253 @@ def get_messages(user1_id: int, user2_id: int) -> list:
     return msgs
 
 
+# ================== 群组（Group Chat）辅助函数 ==================
+
+def get_user_groups(user_id: int) -> list:
+    """获取用户加入的所有群组"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT g.id, g.name, g.description, g.creator_id, gm.role,
+                   (SELECT COUNT(*) FROM group_members WHERE group_id = g.id) as member_count
+            FROM chat_groups g
+            JOIN group_members gm ON g.id = gm.group_id
+            WHERE gm.user_id = %s
+            ORDER BY g.created_at DESC
+        """, (user_id,))
+        return cur.fetchall()
+
+
+def get_group_by_id(group_id: int) -> dict:
+    """获取群组信息"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, description, avatar_url, creator_id, created_at, invite_code
+            FROM chat_groups WHERE id = %s
+        """, (group_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0], "name": row[1], "description": row[2],
+                "avatar_url": row[3], "creator_id": row[4], "created_at": row[5],
+                "invite_code": row[6]
+            }
+        return None
+
+
+def is_group_member(group_id: int, user_id: int) -> bool:
+    """检查用户是否是群成员"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
+        return cur.fetchone() is not None
+
+
+def get_group_role(group_id: int, user_id: int) -> str:
+    """获取用户在群里的角色"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
+        row = cur.fetchone()
+        return row[0] if row else None
+
+
+def get_group_members(group_id: int) -> list:
+    """获取群成员列表，包含禁言状态"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.id, u.username, u.is_admin, gm.role, gm.joined_at, gm.is_muted, gm.muted_until
+            FROM group_members gm
+            JOIN users u ON gm.user_id = u.id
+            WHERE gm.group_id = %s
+            ORDER BY 
+                CASE gm.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 ELSE 3 END,
+                gm.joined_at ASC
+        """, (group_id,))
+        return cur.fetchall()
+
+
+def get_group_messages(group_id: int, limit: int = 100) -> list:
+    """获取群消息"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT gm.id, gm.sender_id, u.username, gm.content, gm.created_at
+            FROM group_messages gm
+            JOIN users u ON gm.sender_id = u.id
+            WHERE gm.group_id = %s
+            ORDER BY gm.created_at ASC
+            LIMIT %s
+        """, (group_id, limit))
+        return cur.fetchall()
+
+
+def generate_invite_code() -> str:
+    """生成8位邀请码"""
+    chars = string.ascii_uppercase + string.digits
+    return ''.join(secrets.choice(chars) for _ in range(8))
+
+
+def get_group_by_invite_code(code: str) -> dict:
+    """通过邀请码获取群组"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, description, creator_id FROM chat_groups WHERE invite_code = %s", (code,))
+        row = cur.fetchone()
+        if row:
+            return {"id": row[0], "name": row[1], "description": row[2], "creator_id": row[3]}
+        return None
+
+
+# ================== 论坛（Forums）辅助函数 ==================
+
+def get_user_forums(user_id: int) -> list:
+    """获取用户加入的所有论坛"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT f.id, f.name, f.description, f.is_private, fm.role,
+                   (SELECT COUNT(*) FROM forum_members WHERE forum_id = f.id) as member_count
+            FROM forums f
+            JOIN forum_members fm ON f.id = fm.forum_id
+            WHERE fm.user_id = %s AND f.is_approved = 1
+            ORDER BY f.created_at DESC
+        """, (user_id,))
+        return cur.fetchall()
+
+
+def get_forum_by_id(forum_id: int) -> dict:
+    """获取论坛信息"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, description, creator_id, is_approved, is_private, invite_code, created_at
+            FROM forums WHERE id = %s
+        """, (forum_id,))
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0], "name": row[1], "description": row[2],
+                "creator_id": row[3], "is_approved": row[4], "is_private": row[5],
+                "invite_code": row[6], "created_at": row[7]
+            }
+        return None
+
+
+def is_forum_member(forum_id: int, user_id: int) -> bool:
+    """检查用户是否是论坛成员"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id FROM forum_members WHERE forum_id = %s AND user_id = %s", (forum_id, user_id))
+        return cur.fetchone() is not None
+
+
+def get_forum_role(forum_id: int, user_id: int) -> str:
+    """获取用户在论坛的角色"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT role FROM forum_members WHERE forum_id = %s AND user_id = %s", (forum_id, user_id))
+        row = cur.fetchone()
+    return row[0] if row else None
+
+
+def can_view_forum(forum_id: int, user_id: int, is_site_admin: bool) -> bool:
+    """检查用户是否可以查看论坛"""
+    forum = get_forum_by_id(forum_id)
+    if not forum or not forum.get("is_approved"):
+        return False
+    if is_site_admin:
+        return True
+    if not forum.get("is_private"):
+        return True
+    return is_forum_member(forum_id, user_id)
+
+
+def can_post_in_forum(forum_id: int, user_id: int, is_site_admin: bool) -> bool:
+    """检查用户是否可以在论坛发帖"""
+    if is_site_admin:
+        return True
+    return is_forum_member(forum_id, user_id)
+
+
+def get_forum_members(forum_id: int) -> list:
+    """获取论坛成员列表"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.id, u.username, u.is_admin, fm.role, fm.joined_at
+            FROM forum_members fm
+            JOIN users u ON fm.user_id = u.id
+            WHERE fm.forum_id = %s
+            ORDER BY 
+                CASE fm.role WHEN 'admin' THEN 1 WHEN 'moderator' THEN 2 ELSE 3 END,
+                fm.joined_at ASC
+        """, (forum_id,))
+        return cur.fetchall()
+
+
+def get_forum_posts(forum_id: int, page: int = 1, per_page: int = 20) -> tuple:
+    """获取论坛帖子（分页）"""
+    offset = (page - 1) * per_page
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        # 总数
+        cur.execute("SELECT COUNT(*) FROM posts WHERE forum_id = %s AND is_deleted = 0", (forum_id,))
+        total = cur.fetchone()[0]
+        # 帖子列表
+        cur.execute("""
+            SELECT p.id, p.title, p.content, p.created_at, u.username,
+                   (SELECT COUNT(*) FROM comments WHERE post_id = p.id AND is_deleted = 0) as comment_count,
+                   (SELECT COUNT(*) FROM post_likes WHERE post_id = p.id) as like_count
+            FROM posts p
+            JOIN users u ON p.user_id = u.id
+            WHERE p.forum_id = %s AND p.is_deleted = 0
+            ORDER BY p.created_at DESC
+            LIMIT %s OFFSET %s
+        """, (forum_id, per_page, offset))
+        posts = cur.fetchall()
+    return posts, total
+
+
+def get_forum_by_invite_code(code: str) -> dict:
+    """通过邀请码获取论坛"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, name, description, is_private FROM forums WHERE invite_code = %s AND is_approved = 1", (code,))
+        row = cur.fetchone()
+        if row:
+            return {"id": row[0], "name": row[1], "description": row[2], "is_private": row[3]}
+        return None
+
+
+def is_member_muted(group_id: int, user_id: int) -> bool:
+    """检查成员是否被禁言并自动解除过期禁言"""
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT is_muted, muted_until FROM group_members WHERE group_id = %s AND user_id = %s",
+            (group_id, user_id)
+        )
+        row = cur.fetchone()
+        if not row:
+            return False
+        is_muted, muted_until = row
+        if not is_muted:
+            return False
+        if muted_until and muted_until < datetime.utcnow():
+            # 禁言已过期，自动解除
+            cur.execute(
+                "UPDATE group_members SET is_muted = 0, muted_until = NULL WHERE group_id = %s AND user_id = %s",
+                (group_id, user_id)
+            )
+            conn.commit()
+            return False
+        return True
+
+
+
 def render_error(request: Request, message: str, back_url: Optional[str] = None, status_code: int = 400):
     # Build a minimal nav-aware context so the navbar can render consistently
     token = request.cookies.get("token") if hasattr(request, "cookies") else None
@@ -640,6 +1149,1172 @@ async def api_posts():
     return JSONResponse(posts)
 
 
+# ================== 群组（Group Chat）路由 ==================
+
+
+@app.get("/groups", response_class=HTMLResponse)
+async def groups_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    groups = get_user_groups(user_id)
+
+    group_list = []
+    for g in groups:
+        # 获取最后一条消息
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT u.username, gm.content, gm.created_at
+                FROM group_messages gm
+                JOIN users u ON gm.sender_id = u.id
+                WHERE gm.group_id = %s
+                ORDER BY gm.created_at DESC LIMIT 1
+            """, (g[0],))
+            last_msg = cur.fetchone()
+
+        group_list.append({
+            "id": g[0],
+            "name": g[1],
+            "description": g[2],
+            "role": g[4],
+            "member_count": g[5],
+            "last_message": last_msg
+        })
+
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("groups.html", {
+        "request": request,
+        "username": username,
+        "groups": group_list,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.get("/groups/new", response_class=HTMLResponse)
+async def new_group_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("new_group.html", {
+        "request": request,
+        "username": username,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/groups/new")
+async def create_group(request: Request, name: str = Form(...), description: str = Form(""), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    # 创建群组
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        code = generate_invite_code()
+        cur.execute(
+            "INSERT INTO chat_groups (name, description, creator_id, invite_code, created_at) VALUES (%s, %s, %s, %s, NOW())",
+            (name, description, user_id, code)
+        )
+        group_id = cur.lastrowid
+
+        # 创建者自动成为 owner
+        cur.execute(
+            "INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (%s, %s, 'owner', NOW())",
+            (group_id, user_id)
+        )
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.get("/groups/{group_id}/invite", response_class=HTMLResponse)
+async def invite_member_page(group_id: int, request: Request, q: str = Query(None), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+
+    # 只有 owner 和 admin 可以邀请
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有邀请成员的权限。", f"/groups/{group_id}")
+
+    # 获取群信息包含 invite_code
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, description, avatar_url, creator_id, created_at, invite_code
+            FROM chat_groups WHERE id = %s
+        """, (group_id,))
+        row = cur.fetchone()
+        if not row:
+            return render_error(request, "群组不存在。", "/groups")
+        group = {
+            "id": row[0],
+            "name": row[1],
+            "description": row[2],
+            "avatar_url": row[3],
+            "creator_id": row[4],
+            "created_at": row[5],
+            "invite_code": row[6]
+        }
+
+    users = []
+    if q:
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            # 搜索用户，排除已经是成员的
+            cur.execute("""
+                SELECT u.id, u.username, u.is_admin
+                FROM users u
+                WHERE u.username LIKE %s
+                AND u.is_banned = 0
+                AND u.id NOT IN (SELECT user_id FROM group_members WHERE group_id = %s)
+                LIMIT 20
+            """, (f"%{q}%", group_id))
+            rows = cur.fetchall()
+            for r in rows:
+                users.append({"id": r[0], "username": r[1], "is_admin": r[2]})
+
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("group_invite.html", {
+        "request": request,
+        "username": username,
+        "group": group,
+        "q": q,
+        "users": users,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/groups/{group_id}/invite/{target_username}")
+async def invite_member(group_id: int, target_username: str, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有邀请成员的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}/invite")
+
+    if is_group_member(group_id, target_id):
+        return render_error(request, "该用户已经是群成员。", f"/groups/{group_id}/invite")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (%s, %s, 'member', NOW())",
+            (group_id, target_id)
+        )
+        conn.commit()
+
+    # 发送通知给被邀请的用户
+    group = get_group_by_id(group_id)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO notifications (user_id, type, message, from_user_id, is_read, created_at) VALUES (%s, 'group_invite', %s, %s, 0, NOW())",
+            (target_id, f"你被邀请加入群组「{group['name']}」", user_id)
+        )
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}/invite", status_code=302)
+
+
+
+@app.get("/groups/join", response_class=HTMLResponse)
+async def join_by_code_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("group_join.html", {
+        "request": request,
+        "username": username,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/groups/join")
+async def join_by_code(request: Request, code: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    group = get_group_by_invite_code(code.strip())
+    if not group:
+        return render_error(request, "邀请码无效或已过期。", "/groups/join")
+
+    group_id = group["id"]
+    if is_group_member(group_id, user_id):
+        return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO group_members (group_id, user_id, role, joined_at) VALUES (%s, %s, 'member', NOW())",
+            (group_id, user_id)
+        )
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/regenerate_invite")
+async def regenerate_invite(group_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有管理邀请码的权限。", f"/groups/{group_id}")
+
+    new_code = generate_invite_code()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE chat_groups SET invite_code = %s WHERE id = %s", (new_code, group_id))
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}/invite", status_code=302)
+
+
+@app.post("/groups/{group_id}/mute")
+async def mute_member(group_id: int, target_username: str = Form(...), minutes: int = Form(60), request: Request = None, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有禁言成员的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}")
+
+    target_role = get_group_role(group_id, target_id)
+    if target_role == 'owner':
+        return render_error(request, "不能禁言群主。", f"/groups/{group_id}")
+
+    # admin 不能禁言其他 admin
+    if role == 'admin' and target_role == 'admin':
+        return render_error(request, "管理员不能禁言其他管理员。", f"/groups/{group_id}")
+
+    muted_until = datetime.utcnow() + timedelta(minutes=int(minutes)) if minutes and int(minutes) > 0 else None
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE group_members SET is_muted = 1, muted_until = %s WHERE group_id = %s AND user_id = %s", (muted_until, group_id, target_id))
+        conn.commit()
+
+    # notify
+    create_notification(target_id, 'group_mute', f"你在群组被禁言 {minutes} 分钟。", None, None, user_id)
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/mute/{target_username}")
+async def mute_member_path(group_id: int, target_username: str, duration: int = Form(60), request: Request = None, token: str = Cookie(None)):
+    # wrapper to support path-based mute forms
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有禁言成员的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}")
+
+    target_role = get_group_role(group_id, target_id)
+    if target_role == 'owner':
+        return render_error(request, "不能禁言群主。", f"/groups/{group_id}")
+
+    if role == 'admin' and target_role == 'admin':
+        return render_error(request, "管理员不能禁言其他管理员。", f"/groups/{group_id}")
+
+    minutes = int(duration) if duration else 60
+    muted_until = datetime.utcnow() + timedelta(minutes=minutes)
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE group_members SET is_muted = 1, muted_until = %s WHERE group_id = %s AND user_id = %s", (muted_until, group_id, target_id))
+        conn.commit()
+
+    create_notification(target_id, 'group_mute', f"你在群组被禁言 {minutes} 分钟。", None, None, user_id)
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/unmute/{target_username}")
+async def unmute_member_path(group_id: int, target_username: str, request: Request = None, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有解除禁言的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE group_members SET is_muted = 0, muted_until = NULL WHERE group_id = %s AND user_id = %s", (group_id, target_id))
+        conn.commit()
+
+    create_notification(target_id, 'group_unmute', f"你在群组的禁言已被解除。", None, None, user_id)
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/unmute")
+async def unmute_member(group_id: int, target_username: str = Form(...), request: Request = None, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有解除禁言的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE group_members SET is_muted = 0, muted_until = NULL WHERE group_id = %s AND user_id = %s", (group_id, target_id))
+        conn.commit()
+
+    create_notification(target_id, 'group_unmute', f"你在群组的禁言已被解除。", None, None, user_id)
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.websocket("/ws/group/{group_id}")
+async def group_ws(websocket: WebSocket, group_id: int):
+    # accept only authenticated group members
+    token = websocket.cookies.get("token") if hasattr(websocket, "cookies") else None
+    token = token or websocket.query_params.get("token")
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    user_id = get_user_id(username)
+    if not is_group_member(group_id, user_id):
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        return
+
+    await group_chat_manager.connect(websocket, group_id, username)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            try:
+                obj = json.loads(data)
+                if isinstance(obj, dict) and obj.get("type") == "message":
+                    content = (obj.get("content") or "").strip()
+                else:
+                    content = str(data).strip()
+            except Exception:
+                content = str(data).strip()
+
+            if not content:
+                continue
+
+            if is_member_muted(group_id, user_id):
+                await websocket.send_text(json.dumps({"type": "error", "message": "你已被禁言，无法发送消息。"}, ensure_ascii=False))
+                continue
+
+            with get_db_conn() as conn:
+                cur = conn.cursor()
+                cur.execute(
+                    "INSERT INTO group_messages (group_id, sender_id, content, created_at) VALUES (%s, %s, %s, NOW())",
+                    (group_id, user_id, content)
+                )
+                msg_id = cur.lastrowid
+                conn.commit()
+
+            payload = {
+                "type": "new_message",
+                "id": msg_id,
+                "group_id": group_id,
+                "sender_id": user_id,
+                "sender_username": username,
+                "content": content,
+                "created_at": datetime.utcnow().isoformat()
+            }
+            await group_chat_manager.broadcast_to_group(group_id, payload)
+
+    except WebSocketDisconnect:
+        group_chat_manager.disconnect(websocket)
+    except Exception:
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+        group_chat_manager.disconnect(websocket)
+
+
+@app.post("/groups/{group_id}/send")
+async def send_group_message(group_id: int, request: Request, content: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    if not is_group_member(group_id, user_id):
+        return render_error(request, "你不是该群成员。", "/groups")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO group_messages (group_id, sender_id, content, created_at) VALUES (%s, %s, %s, NOW())",
+            (group_id, user_id, content)
+        )
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.post("/groups/{group_id}/leave")
+async def leave_group(group_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+
+    if not role:
+        return render_error(request, "你不是该群成员。", "/groups")
+
+    # Owner 不能直接退出，需要先转让
+    if role == 'owner':
+        return render_error(request, "群主不能直接退出，请先转让群主。", f"/groups/{group_id}")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, user_id))
+        conn.commit()
+
+    return RedirectResponse("/groups", status_code=302)
+
+
+@app.post("/groups/{group_id}/kick/{target_username}")
+async def kick_member(group_id: int, target_username: str, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    role = get_group_role(group_id, user_id)
+
+    # 只有 owner 和 admin 可以踢人
+    if role not in ['owner', 'admin']:
+        return render_error(request, "你没有踢人的权限。", f"/groups/{group_id}")
+
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/groups/{group_id}")
+
+    target_role = get_group_role(group_id, target_id)
+
+    # 不能踢 owner
+    if target_role == 'owner':
+        return render_error(request, "不能踢出群主。", f"/groups/{group_id}")
+
+    # admin 不能踢 admin
+    if role == 'admin' and target_role == 'admin':
+        return render_error(request, "管理员不能踢出其他管理员。", f"/groups/{group_id}")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM group_members WHERE group_id = %s AND user_id = %s", (group_id, target_id))
+        conn.commit()
+
+    return RedirectResponse(f"/groups/{group_id}", status_code=302)
+
+
+@app.get("/groups/{group_id}", response_class=HTMLResponse)
+async def group_chat_page(group_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    # 检查是否是群成员
+    if not is_group_member(group_id, user_id):
+        return render_error(request, "你不是该群成员。", "/groups")
+
+    group = get_group_by_id(group_id)
+    if not group:
+        return render_error(request, "群组不存在。", "/groups")
+
+    messages = get_group_messages(group_id)
+    # 获取成员列表包含禁言状态
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT u.id, u.username, u.is_admin, gm.role, gm.joined_at, gm.is_muted, gm.muted_until
+            FROM group_members gm
+            JOIN users u ON gm.user_id = u.id
+            WHERE gm.group_id = %s
+            ORDER BY CASE gm.role WHEN 'owner' THEN 1 WHEN 'admin' THEN 2 ELSE 3 END, gm.joined_at ASC
+        """, (group_id,))
+        members = cur.fetchall()
+    role = get_group_role(group_id, user_id)
+
+    message_list = []
+    for m in messages:
+        message_list.append({
+            "id": m[0],
+            "sender_id": m[1],
+            "sender_username": m[2],
+            "content": m[3],
+            "created_at": m[4]
+        })
+
+    member_list = []
+    for m in members:
+        # m: id, username, is_admin, role, joined_at, is_muted, muted_until
+        is_muted = False
+        try:
+            is_muted_flag = m[5]
+            muted_until = m[6]
+        except Exception:
+            is_muted_flag = 0
+            muted_until = None
+        # 被标记为禁言且未设置结束时间或结束时间在将来则视为仍被禁言
+        is_muted = (is_muted_flag == 1) and (muted_until is None or muted_until > datetime.utcnow())
+        member_list.append({
+            "id": m[0],
+            "username": m[1],
+            "is_admin": m[2],
+            "role": m[3],
+            "joined_at": m[4],
+            "is_muted": is_muted
+        })
+
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("group_chat.html", {
+        "request": request,
+        "username": username,
+        "current_user_id": user_id,
+        "group": group,
+        "messages": message_list,
+        "members": member_list,
+        "role": role,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+# ================== 论坛（Forums）路由 ==================
+
+
+@app.get("/forums", response_class=HTMLResponse)
+async def forums_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    
+    # 我加入的论坛
+    my_forums = get_user_forums(user_id)
+    
+    # 公开论坛（我没加入的）
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT f.id, f.name, f.description,
+                   (SELECT COUNT(*) FROM forum_members WHERE forum_id = f.id) as member_count
+            FROM forums f
+            WHERE f.is_approved = 1 AND f.is_private = 0
+            AND f.id NOT IN (SELECT forum_id FROM forum_members WHERE user_id = %s)
+            ORDER BY f.created_at DESC
+        """, (user_id,))
+        public_forums = cur.fetchall()
+    
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    
+    return templates.TemplateResponse("forums.html", {
+        "request": request,
+        "username": username,
+        "my_forums": my_forums,
+        "public_forums": public_forums,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.get("/forums/request", response_class=HTMLResponse)
+async def request_forum_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+    
+    # 获取用户的申请记录
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT id, name, description, reason, status, admin_reply, created_at
+            FROM forum_requests WHERE user_id = %s ORDER BY created_at DESC
+        """, (user_id,))
+        my_requests = cur.fetchall()
+    
+    return templates.TemplateResponse("forum_request.html", {
+        "request": request,
+        "username": username,
+        "my_requests": my_requests,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/forums/request")
+async def submit_forum_request(request: Request, name: str = Form(...), description: str = Form(""), reason: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO forum_requests (user_id, name, description, reason, status, created_at) VALUES (%s, %s, %s, %s, 'pending', NOW())",
+            (user_id, name, description, reason)
+        )
+        conn.commit()
+    
+    return RedirectResponse("/forums/request", status_code=302)
+
+
+@app.get("/forums/join", response_class=HTMLResponse)
+async def join_forum_page(request: Request, code: str = Query(None), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    forum = None
+    error = None
+    already_member = False
+    
+    if code:
+        forum = get_forum_by_invite_code(code)
+        if not forum:
+            error = "邀请码无效或论坛不存在"
+        elif is_forum_member(forum["id"], user_id):
+            already_member = True
+    
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+    
+    return templates.TemplateResponse("forum_join.html", {
+        "request": request,
+        "username": username,
+        "code": code,
+        "forum": forum,
+        "error": error,
+        "already_member": already_member,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/forums/join")
+async def join_forum_submit(request: Request, code: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    forum = get_forum_by_invite_code(code)
+    
+    if not forum:
+        return render_error(request, "邀请码无效或论坛不存在。", "/forums/join")
+    
+    if is_forum_member(forum["id"], user_id):
+        return RedirectResponse(f"/forums/{forum['id']}", status_code=302)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO forum_members (forum_id, user_id, role, joined_at) VALUES (%s, %s, 'member', NOW())",
+            (forum["id"], user_id)
+        )
+        conn.commit()
+    
+    return RedirectResponse(f"/forums/{forum['id']}", status_code=302)
+
+
+@app.get("/forums/{forum_id}", response_class=HTMLResponse)
+async def forum_detail_page(forum_id: int, request: Request, page: int = Query(1), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    
+    # 检查权限
+    if not can_view_forum(forum_id, user_id, is_admin_flag):
+        return render_error(request, "你没有权限查看此论坛。", "/forums")
+    
+    forum = get_forum_by_id(forum_id)
+    role = get_forum_role(forum_id, user_id)
+    posts, total = get_forum_posts(forum_id, page)
+    members = get_forum_members(forum_id)
+    
+    per_page = 20
+    total_pages = (total + per_page - 1) // per_page
+    
+    post_list = []
+    for p in posts:
+        post_list.append({
+            "id": p[0], "title": p[1], "content": p[2][:100] + "..." if p[2] and len(p[2]) > 100 else (p[2] or ""),
+            "created_at": p[3], "author": p[4], "comment_count": p[5], "like_count": p[6]
+        })
+    
+    member_list = []
+    for m in members:
+        member_list.append({
+            "id": m[0], "username": m[1], "is_site_admin": m[2], "role": m[3], "joined_at": m[4]
+        })
+    
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    
+    return templates.TemplateResponse("forum_detail.html", {
+        "request": request,
+        "username": username,
+        "forum": forum,
+        "posts": post_list,
+        "members": member_list,
+        "role": role,
+        "page": page,
+        "total_pages": total_pages,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.get("/forums/{forum_id}/new_post", response_class=HTMLResponse)
+async def new_forum_post_page(forum_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    
+    if not can_post_in_forum(forum_id, user_id, is_admin_flag):
+        return render_error(request, "你没有权限在此论坛发帖。", f"/forums/{forum_id}")
+    
+    forum = get_forum_by_id(forum_id)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    
+    return templates.TemplateResponse("forum_new_post.html", {
+        "request": request,
+        "username": username,
+        "forum": forum,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/forums/{forum_id}/new_post")
+async def create_forum_post(forum_id: int, request: Request, title: str = Form(...), content: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    
+    if not can_post_in_forum(forum_id, user_id, is_admin_flag):
+        return render_error(request, "你没有权限在此论坛发帖。", f"/forums/{forum_id}")
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO posts (user_id, title, content, forum_id, created_at, is_deleted) VALUES (%s, %s, %s, %s, NOW(), 0)",
+            (user_id, title, content, forum_id)
+        )
+        post_id = cur.lastrowid
+        conn.commit()
+    
+    return RedirectResponse(f"/post/{post_id}", status_code=302)
+
+
+
+@app.get("/forums/{forum_id}/members", response_class=HTMLResponse)
+async def forum_members_page(forum_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    role = get_forum_role(forum_id, user_id)
+    
+    # 只有论坛管理员或超级管理员可以管理成员
+    if role != 'admin' and not is_admin_flag:
+        return render_error(request, "你没有权限管理成员。", f"/forums/{forum_id}")
+    
+    forum = get_forum_by_id(forum_id)
+    members = get_forum_members(forum_id)
+    
+    member_list = []
+    for m in members:
+        member_list.append({
+            "id": m[0], "username": m[1], "is_site_admin": m[2], "role": m[3], "joined_at": m[4]
+        })
+    
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    
+    return templates.TemplateResponse("forum_members.html", {
+        "request": request,
+        "username": username,
+        "forum": forum,
+        "members": member_list,
+        "role": role,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/forums/{forum_id}/kick/{target_username}")
+async def kick_forum_member(forum_id: int, target_username: str, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    role = get_forum_role(forum_id, user_id)
+    
+    if role not in ['admin', 'moderator'] and not is_admin_flag:
+        return render_error(request, "你没有权限踢人。", f"/forums/{forum_id}")
+    
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/forums/{forum_id}/members")
+    
+    target_role = get_forum_role(forum_id, target_id)
+    
+    # 不能踢论坛管理员（除非是超级管理员）
+    if target_role == 'admin' and not is_admin_flag:
+        return render_error(request, "不能踢出论坛管理员。", f"/forums/{forum_id}/members")
+    
+    # 版主不能踢版主
+    if role == 'moderator' and target_role == 'moderator':
+        return render_error(request, "版主不能踢出其他版主。", f"/forums/{forum_id}/members")
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM forum_members WHERE forum_id = %s AND user_id = %s", (forum_id, target_id))
+        conn.commit()
+    
+    return RedirectResponse(f"/forums/{forum_id}/members", status_code=302)
+
+
+@app.post("/forums/{forum_id}/set_role/{target_username}")
+async def set_member_role(forum_id: int, target_username: str, request: Request, role: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    is_admin_flag = is_admin(username)
+    my_role = get_forum_role(forum_id, user_id)
+    
+    # 只有论坛管理员或超级管理员可以设置角色
+    if my_role != 'admin' and not is_admin_flag:
+        return render_error(request, "你没有权限设置角色。", f"/forums/{forum_id}/members")
+    
+    if role not in ['admin', 'moderator', 'member']:
+        return render_error(request, "无效的角色。", f"/forums/{forum_id}/members")
+    
+    target_id = get_user_id(target_username)
+    if not target_id:
+        return render_error(request, "用户不存在。", f"/forums/{forum_id}/members")
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE forum_members SET role = %s WHERE forum_id = %s AND user_id = %s", (role, forum_id, target_id))
+        conn.commit()
+    
+    return RedirectResponse(f"/forums/{forum_id}/members", status_code=302)
+
+
+@app.post("/forums/{forum_id}/leave")
+async def leave_forum(forum_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    role = get_forum_role(forum_id, user_id)
+    
+    # 论坛管理员不能直接退出
+    if role == 'admin':
+        return render_error(request, "论坛管理员不能直接退出，请先转让管理员权限。", f"/forums/{forum_id}")
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("DELETE FROM forum_members WHERE forum_id = %s AND user_id = %s", (forum_id, user_id))
+        conn.commit()
+    
+    return RedirectResponse("/forums", status_code=302)
+
+
+@app.get("/admin/forum_requests", response_class=HTMLResponse)
+async def admin_forum_requests(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username) or not is_admin(username):
+        return RedirectResponse("/login", status_code=302)
+    
+    user_id = get_user_id(username)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT fr.id, fr.name, fr.description, fr.reason, fr.status, fr.created_at, u.username
+            FROM forum_requests fr
+            JOIN users u ON fr.user_id = u.id
+            WHERE fr.status = 'pending'
+            ORDER BY fr.created_at ASC
+        """)
+        pending_requests = cur.fetchall()
+    
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    
+    return templates.TemplateResponse("admin_forum_requests.html", {
+        "request": request,
+        "username": username,
+        "pending_requests": pending_requests,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": True,
+    })
+
+
+@app.post("/admin/forum_requests/{request_id}/approve")
+async def approve_forum_request(request_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username) or not is_admin(username):
+        return RedirectResponse("/login", status_code=302)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        
+        # 获取申请信息
+        cur.execute("SELECT user_id, name, description FROM forum_requests WHERE id = %s", (request_id,))
+        req = cur.fetchone()
+        if not req:
+            return render_error(request, "申请不存在。", "/admin/forum_requests")
+        
+        creator_id, name, description = req
+        
+        # 生成邀请码
+        invite_code = generate_invite_code()
+        
+        # 创建论坛
+        cur.execute(
+            "INSERT INTO forums (name, description, creator_id, is_approved, is_private, invite_code, created_at) VALUES (%s, %s, %s, 1, 1, %s, NOW())",
+            (name, description, creator_id, invite_code)
+        )
+        forum_id = cur.lastrowid
+        
+        # 申请者成为论坛管理员
+        cur.execute(
+            "INSERT INTO forum_members (forum_id, user_id, role, joined_at) VALUES (%s, %s, 'admin', NOW())",
+            (forum_id, creator_id)
+        )
+        
+        # 更新申请状态
+        cur.execute("UPDATE forum_requests SET status = 'approved' WHERE id = %s", (request_id,))
+        
+        # 发送通知
+        cur.execute(
+            "INSERT INTO notifications (user_id, type, message, is_read, created_at) VALUES (%s, 'forum_approved', %s, 0, NOW())",
+            (creator_id, f"恭喜！你申请的论坛「{name}」已被批准。")
+        )
+        
+        conn.commit()
+    
+    return RedirectResponse("/admin/forum_requests", status_code=302)
+
+
+@app.post("/admin/forum_requests/{request_id}/reject")
+async def reject_forum_request(request_id: int, request: Request, reply: str = Form(""), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username) or not is_admin(username):
+        return RedirectResponse("/login", status_code=302)
+    
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        
+        cur.execute("SELECT user_id, name FROM forum_requests WHERE id = %s", (request_id,))
+        req = cur.fetchone()
+        if not req:
+            return render_error(request, "申请不存在。", "/admin/forum_requests")
+        
+        creator_id, name = req
+        
+        cur.execute("UPDATE forum_requests SET status = 'rejected', admin_reply = %s WHERE id = %s", (reply, request_id))
+        
+        # 发送通知
+        message = f"你申请的论坛「{name}」未被批准。"
+        if reply:
+            message += f" 原因：{reply}"
+        cur.execute(
+            "INSERT INTO notifications (user_id, type, message, is_read, created_at) VALUES (%s, 'forum_rejected', %s, 0, NOW())",
+            (creator_id, message)
+        )
+        
+        conn.commit()
+    
+    return RedirectResponse("/admin/forum_requests", status_code=302)
+
+
 @app.get("/search", response_class=HTMLResponse)
 async def search_page(
     request: Request,
@@ -754,7 +2429,15 @@ async def register_page(request: Request):
 
 
 @app.get("/logout")
-async def logout():
+async def logout(request: Request, token: str = Cookie(None)):
+    if token:
+        session_token = get_session_from_token(token)
+        if session_token:
+            with get_db_conn() as conn:
+                cur = conn.cursor()
+                cur.execute("UPDATE user_sessions SET is_active = 0 WHERE session_token = %s", (session_token,))
+                conn.commit()
+
     resp = RedirectResponse("/", status_code=302)
     resp.delete_cookie("token")
     return resp
@@ -789,6 +2472,99 @@ async def settings_page(request: Request, token: str = Cookie(None)):
             "is_admin": bool(user_is_admin),
         }),
     )
+
+
+@app.get("/settings/sessions", response_class=HTMLResponse)
+async def sessions_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    current_session = get_session_from_token(token)
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, session_token, device_info, ip_address, created_at, last_active FROM user_sessions WHERE user_id = %s AND is_active = 1 ORDER BY last_active DESC",
+            (user_id,)
+        )
+        sessions = cur.fetchall()
+
+    session_list = []
+    for s in sessions:
+        session_list.append({
+            "id": s[0],
+            "session_token": s[1],
+            "device_info": s[2],
+            "ip_address": s[3],
+            "created_at": s[4],
+            "last_active": s[5],
+            "is_current": s[1] == current_session
+        })
+
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+
+    return templates.TemplateResponse("sessions.html", {
+        "request": request,
+        "username": username,
+        "sessions": session_list,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/settings/sessions/{session_id}/revoke")
+async def revoke_session(session_id: int, request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM user_sessions WHERE id = %s", (session_id,))
+        row = cur.fetchone()
+
+    if not row or row[0] != user_id:
+        return render_error(request, "无权操作。", "/settings/sessions")
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("UPDATE user_sessions SET is_active = 0 WHERE id = %s", (session_id,))
+        conn.commit()
+
+    return RedirectResponse("/settings/sessions", status_code=302)
+
+
+@app.post("/settings/sessions/revoke_all")
+async def revoke_all_sessions(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+
+    user_id = get_user_id(username)
+    current_session = get_session_from_token(token)
+
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "UPDATE user_sessions SET is_active = 0 WHERE user_id = %s AND session_token != %s",
+            (user_id, current_session)
+        )
+        conn.commit()
+
+    return RedirectResponse("/settings/sessions", status_code=302)
 
 
 @app.post("/settings/password")
@@ -835,6 +2611,90 @@ async def change_password(
         conn.commit()
 
     return render_error(request, "密码修改成功，下次请使用新密码登录。", back_url="/", status_code=200)
+
+
+@app.get("/settings/delete_account", response_class=HTMLResponse)
+async def delete_account_page(request: Request, token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    user_id = get_user_id(username)
+    unread_count = get_unread_notifications_count(user_id)
+    message_unread_count = get_unread_messages_count(user_id)
+    is_admin_flag = is_admin(username)
+    
+    return templates.TemplateResponse("delete_account.html", {
+        "request": request,
+        "username": username,
+        "unread_count": unread_count,
+        "message_unread_count": message_unread_count,
+        "is_admin": is_admin_flag,
+    })
+
+
+@app.post("/settings/delete_account")
+async def delete_account_submit(request: Request, password: str = Form(...), confirm: str = Form(...), token: str = Cookie(None)):
+    username = get_username_from_token(token)
+    if not username or is_banned(username):
+        resp = RedirectResponse("/login", status_code=302)
+        resp.delete_cookie("token")
+        return resp
+    
+    # 确认输入
+    if confirm != "DELETE":
+        return render_error(request, "请输入 DELETE 确认删除。", "/settings/delete_account")
+    
+    # 验证密码
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, password FROM users WHERE username = %s", (username,))
+        row = cur.fetchone()
+    
+    if not row or not pwd_context.verify(password, row[1]):
+        return render_error(request, "密码错误。", "/settings/delete_account")
+    
+    user_id = row[0]
+    
+    # 删除用户相关数据
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        
+        # 删除用户的帖子（软删除）
+        cur.execute("UPDATE posts SET is_deleted = 1 WHERE user_id = %s", (user_id,))
+        
+        # 删除用户的评论（软删除）
+        cur.execute("UPDATE comments SET is_deleted = 1 WHERE user_id = %s", (user_id,))
+        
+        # 删除点赞
+        cur.execute("DELETE FROM post_likes WHERE user_id = %s", (user_id,))
+        
+        # 删除通知
+        cur.execute("DELETE FROM notifications WHERE user_id = %s", (user_id,))
+        
+        # 删除私信
+        cur.execute("DELETE FROM private_messages WHERE sender_id = %s OR receiver_id = %s", (user_id, user_id))
+        
+        # 删除会话
+        cur.execute("DELETE FROM user_sessions WHERE user_id = %s", (user_id,))
+        
+        # 退出所有论坛
+        cur.execute("DELETE FROM forum_members WHERE user_id = %s", (user_id,))
+        
+        # 退出所有群组
+        cur.execute("DELETE FROM group_members WHERE user_id = %s", (user_id,))
+        
+        # 最后删除用户
+        cur.execute("DELETE FROM users WHERE id = %s", (user_id,))
+        
+        conn.commit()
+    
+    # 清除 cookie 并跳转
+    resp = RedirectResponse("/", status_code=302)
+    resp.delete_cookie("token")
+    return resp
 
 
 @app.get("/user/{username}", response_class=HTMLResponse)
@@ -1862,7 +3722,46 @@ async def login(request: Request, username: str = Form(), password: str = Form()
     if row[1] == 1:
         return render_error(request, "此账号已被封禁，请联系管理员。", back_url="/", status_code=403)
 
-    token = create_token(username)
+    # 成功登录，创建 session_token 并保存到 user_sessions
+    session_token = str(uuid.uuid4())
+    user_agent = request.headers.get("user-agent", "Unknown")
+    client_ip = request.client.host if request.client else "0.0.0.0"
+
+    user_id = get_user_id(username)
+    # 获取旧的活跃会话
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, device_info, ip_address, created_at FROM user_sessions WHERE user_id = %s AND is_active = 1",
+            (user_id,)
+        )
+        old_sessions = cur.fetchall()
+        
+    print(f"DEBUG: user_id={user_id}, old_sessions={old_sessions}")
+    # 如果有旧会话，发送通知（站内通知）
+    if old_sessions:
+        device_short = user_agent[:50] + "..." if len(user_agent) > 50 else user_agent
+        message = f"新设备登录提醒：{device_short} (IP: {client_ip}) 刚刚登录了你的账号"
+        now = datetime.utcnow()
+        with get_db_conn() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT INTO notifications (user_id, type, message, is_read, created_at) VALUES (%s, %s, %s, %s, %s)",
+                (user_id, 'new_login', message, 0, now)
+            )
+            conn.commit()
+
+    # 插入新 session
+    now = datetime.utcnow()
+    with get_db_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO user_sessions (user_id, session_token, device_info, ip_address, is_active, created_at, last_active) VALUES (%s, %s, %s, %s, 1, %s, %s)",
+            (user_id, session_token, user_agent, client_ip, now, now)
+        )
+        conn.commit()
+
+    token = create_token_with_session(username, session_token)
     resp = RedirectResponse("/", status_code=302)
     resp.set_cookie("token", token, httponly=True, max_age=7*24*60*60)
     return resp

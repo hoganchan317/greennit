@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>申请创建论坛 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <a href="/forums" class="text-slate-400 hover:text-white text-sm">← 返回论坛列表</a>
+  <h1 class="text-2xl font-bold mt-2 mb-6">申请创建论坛</h1>
+
+  <div class="bg-slate-800/80 rounded-xl p-6 max-w-xl">
+    <form method="post" action="/forums/request">
+      <div class="mb-4">
+        <label class="block text-sm text-slate-400 mb-2">论坛名称 *</label>
+        <input type="text" name="name" required
+               class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+               placeholder="例如：5A班论坛">
+      </div>
+      
+      <div class="mb-4">
+        <label class="block text-sm text-slate-400 mb-2">论坛简介</label>
+        <textarea name="description" rows="2"
+                  class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+                  placeholder="简单介绍一下这个论坛的用途"></textarea>
+      </div>
+      
+      <div class="mb-6">
+        <label class="block text-sm text-slate-400 mb-2">申请理由 *</label>
+        <textarea name="reason" rows="3" required
+                  class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+                  placeholder="请说明为什么需要创建这个论坛"></textarea>
+      </div>
+      
+      <div class="flex gap-3">
+        <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">
+          提交申请
+        </button>
+        <a href="/forums" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600">
+          取消
+        </a>
+      </div>
+    </form>
+  </div>
+
+  <!-- 我的申请记录 -->
+  {% if my_requests %}
+  <h2 class="text-lg font-semibold mt-8 mb-4">我的申请记录</h2>
+  <div class="space-y-3">
+    {% for r in my_requests %}
+      <div class="bg-slate-800/80 rounded-xl p-4">
+        <div class="flex justify-between items-start">
+          <div>
+            <div class="font-medium">{{ r[1] }}</div>
+            <div class="text-sm text-slate-400">{{ r[6].strftime('%Y-%m-%d %H:%M') if r[6] else '' }}</div>
+          </div>
+          <div>
+            {% if r[4] == 'pending' %}
+              <span class="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-400">待审核</span>
+            {% elif r[4] == 'approved' %}
+              <span class="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-400">已通过</span>
+            {% else %}
+              <span class="text-xs px-2 py-1 rounded bg-red-500/20 text-red-400">已拒绝</span>
+            {% endif %}
+          </div>
+        </div>
+        {% if r[5] %}
+          <div class="mt-2 text-sm text-slate-400">管理员回复：{{ r[5] }}</div>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

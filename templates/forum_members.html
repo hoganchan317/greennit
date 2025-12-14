@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>{{ forum.name }} 成员 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="max-w-3xl mx-auto p-4">
+    <h1 class="text-2xl font-bold mb-4">{{ forum.name }} 成员</h1>
+    <div class="space-y-2">
+      {% for m in members %}
+        <div class="p-3 bg-slate-800 rounded flex justify-between items-center">
+          <div>
+            <div class="font-medium">{{ m[0] }}</div>
+            <div class="text-sm text-slate-400">加入于 {{ m[2] }}</div>
+          </div>
+          <div>
+            {% if can_manage %}
+              {% if m[0] != current_username %}
+                <form method="post" action="/forums/{{ forum.id }}/kick/{{ m[0] }}" style="display:inline">
+                  <button class="px-2 py-1 bg-red-600 rounded">踢出</button>
+                </form>
+                <form method="post" action="/forums/{{ forum.id }}/set_role/{{ m[0] }}" style="display:inline" class="ml-2">
+                  <select name="role" onchange="this.form.submit()">
+                    <option value="member" {% if m[1]== 'member' %}selected{% endif %}>成员</option>
+                    <option value="moderator" {% if m[1]== 'moderator' %}selected{% endif %}>版主</option>
+                    <option value="admin" {% if m[1]== 'admin' %}selected{% endif %}>管理员</option>
+                  </select>
+                </form>
+              {% endif %}
+            {% endif %}
+          </div>
+        </div>
+      {% else %}
+        <div class="text-slate-400">暂无成员。</div>
+      {% endfor %}
+    </div>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

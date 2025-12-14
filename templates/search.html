@@ -5,171 +5,73 @@
   <title>搜索 - Greennit</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
-    mark.search-hit {
-      background-color: rgba(251, 191, 36, 0.7); /* amber-400 */
-      color: black;
-      padding: 0 2px;
-      border-radius: 2px;
-    }
+    mark.search-hit { background-color: rgba(251,191,36,0.7); color:black; padding:0 2px; border-radius:2px }
   </style>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-<div class="max-w-6xl mx-auto px-4 py-8">
+  <div class="max-w-6xl mx-auto px-4 py-8">
+    {% include "_navbar.html" %}
 
-  {% include "_navbar.html" %}
+    <h1 class="text-2xl font-bold mb-4">搜索帖子</h1>
 
-  <h1 class="text-2xl font-bold mb-4">搜索帖子</h1>
+    <form method="get" action="/search" class="mb-6 flex flex-wrap gap-2 items-center">
+      <input name="q" value="{{ q if q is defined else '' }}" placeholder="输入关键字..." class="flex-1 min-w-[200px] px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
 
-  <!-- 搜索表单：支持 scope -->
-  <form method="get" action="/search" class="mb-6 flex flex-wrap gap-2 items-center">
-    <input name="q" value="{{ q }}" placeholder="输入关键字..."
-           class="flex-1 min-w-[200px] px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <select name="scope" class="px-2 py-2 rounded bg-slate-800 border border-slate-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+        <option value="all" {% if scope == 'all' %}selected{% endif %}>全部</option>
+        <option value="title" {% if scope == 'title' %}selected{% endif %}>标题</option>
+        <option value="content" {% if scope == 'content' %}selected{% endif %}>内容</option>
+        <option value="author" {% if scope == 'author' %}selected{% endif %}>作者</option>
+        <option value="topic" {% if scope == 'topic' %}selected{% endif %}>板块</option>
+      </select>
 
-    <select name="scope"
-            class="px-2 py-2 rounded bg-slate-800 border border-slate-600 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
-      <option value="all" {% if scope == 'all' %}selected{% endif %}>全部</option>
-      <option value="title" {% if scope == 'title' %}selected{% endif %}>标题</option>
-      <option value="content" {% if scope == 'content' %}selected{% endif %}>内容</option>
-      <option value="author" {% if scope == 'author' %}selected{% endif %}>作者</option>
-      <option value="topic" {% if scope == 'topic' %}selected{% endif %}>板块</option>
-    </select>
+      <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">搜索</button>
+    </form>
 
-    <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">
-      搜索
-    </button>
-  </form>
-
-  {% if q %}
-    <p class="text-sm text-slate-400 mb-4">
-      关键字：<span class="text-emerald-300">"{{ q }}"</span>
-      <span class="ml-2 text-slate-500">
-        范围：
-        {% if scope == 'all' %}全部{% elif scope == 'title' %}标题{% elif scope == 'content' %}内容{% elif scope == 'author' %}作者{% elif scope == 'topic' %}板块{% endif %}
-      </span>
-    </p>
-  {% endif %}
-
-  <!-- 搜索结果列表 -->
-  <div class="space-y-4">
-    {% if q and results %}
-      {% for p in results %}
-        <!-- p: (id, title, content, created_at, username, topic_name, likes) -->
-        <div class="bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition">
-          <div class="flex justify-between items-center mb-1">
-            <a href="/post/{{ p[0] }}"
-               class="text-xl font-semibold hover:underline search-title">
-              {{ p[1] }}
-            </a>
-            <div class="flex items-center gap-2">
-              <span class="text-xs opacity-70">
-                {% if p[5] %}
-                  <span class="text-emerald-300 mr-1 search-topic">{{ p[5] }}</span>
-                {% endif %}
-                by
-                <span class="search-author">{{ p[4] }}</span>
-                · {{ p[3].strftime('%Y-%m-%d %H:%M') if p[3] else '' }}
-              </span>
-            </div>
-          </div>
-
-          <div class="flex justify-between items-center mb-1 text-xs text-slate-400">
-            <div>❤ {{ p[6] }}</div>
-          </div>
-
-          <p class="text-sm opacity-80 line-clamp-2 search-content">
-            {{ p[2][:160] }}{% if p[2]|length > 160 %}...{% endif %}
-          </p>
-        </div>
-      {% endfor %}
-    {% elif q %}
-      <div class="text-center text-slate-400 py-8">
-        没有找到包含 "{{ q }}" 的帖子。
-      </div>
+    {% if q %}
+      <p class="text-sm text-slate-400 mb-4">关键字：<span class="text-emerald-300">"{{ q }}"</span>
+        <span class="ml-2 text-slate-500">范围：{% if scope == 'all' %}全部{% elif scope=='title' %}标题{% elif scope=='content' %}内容{% elif scope=='author' %}作者{% elif scope=='topic' %}板块{% endif %}</span>
+      </p>
     {% endif %}
-  </div>
 
-  <!-- 分页导航 -->
-  {% if q and total_pages and total_pages > 1 %}
-    <div class="mt-6 flex justify-center items-center gap-4 text-sm text-slate-300">
-      {% if has_prev %}
-        <a href="/search?q={{ q }}&scope={{ scope }}&page={{ page - 1 }}"
-           class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">
-          上一页
-        </a>
-      {% else %}
-        <span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500 cursor-not-allowed">
-          上一页
-        </span>
-      {% endif %}
-
-      <span>第 {{ page }} / {{ total_pages }} 页</span>
-
-      {% if has_next %}
-        <a href="/search?q={{ q }}&scope={{ scope }}&page={{ page + 1 }}"
-           class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">
-          下一页
-        </a>
-      {% else %}
-        <span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500 cursor-not-allowed">
-          下一页
-        </span>
+    <div class="space-y-4">
+      {% if q and results %}
+        {% for p in results %}
+          <div class="bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700 transition">
+            <div class="flex justify-between items-center mb-1">
+              <a href="/post/{{ p[0] }}" class="text-xl font-semibold hover:underline search-title">{{ p[1] }}</a>
+              <div class="flex items-center gap-2 text-xs opacity-70">{% if p[5] %}<span class="text-emerald-300 mr-1 search-topic">{{ p[5] }}</span>{% endif %} by <span class="search-author">{{ p[4] }}</span> · {{ p[3].strftime('%Y-%m-%d %H:%M') if p[3] else '' }}</div>
+            </div>
+            <div class="mb-1 text-xs text-slate-400">❤ {{ p[6] }}</div>
+            <p class="text-sm opacity-80 line-clamp-2 search-content">{{ p[2][:160] }}{% if p[2]|length>160 %}...{% endif %}</p>
+          </div>
+        {% endfor %}
+      {% elif q %}
+        <div class="text-center text-slate-400 py-8">没有找到包含 "{{ q }}" 的帖子。</div>
       {% endif %}
     </div>
-  {% endif %}
 
-</div>
+    {% if q and total_pages and total_pages > 1 %}
+      <div class="mt-6 flex justify-center items-center gap-4 text-sm text-slate-300">
+        {% if has_prev %}<a href="/search?q={{ q }}&scope={{ scope }}&page={{ page-1 }}" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">上一页</a>{% else %}<span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500">上一页</span>{% endif %}
+        <span>第 {{ page }} / {{ total_pages }} 页</span>
+        {% if has_next %}<a href="/search?q={{ q }}&scope={{ scope }}&page={{ page+1 }}" class="px-3 py-1 rounded bg-slate-800 hover:bg-slate-700">下一页</a>{% else %}<span class="px-3 py-1 rounded bg-slate-800/40 text-slate-500">下一页</span>{% endif %}
+      </div>
+    {% endif %}
 
-<script>
-  (function () {
-    const q = "{{ q | e }}".trim();
-    const scope = "{{ scope | e }}";
+  </div>
 
-    if (!q) return;
-
-    function highlightInElements(selector) {
-      const els = document.querySelectorAll(selector);
-      els.forEach(el => {
-        const text = el.textContent;
-        if (!text) return;
-        const idx = text.toLowerCase().indexOf(q.toLowerCase());
-        if (idx === -1) return;
-
-        // 简单只高亮第一次出现，避免太复杂
-        const before = text.slice(0, idx);
-        const match = text.slice(idx, idx + q.length);
-        const after = text.slice(idx + q.length);
-
-        el.innerHTML = ""
-          + escapeHtml(before)
-          + "<mark class='search-hit'>" + escapeHtml(match) + "</mark>"
-          + escapeHtml(after);
-      });
-    }
-
-    function escapeHtml(str) {
-      return str
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    }
-
-    // 根据 scope 选择要高亮的区域
-    if (scope === "title") {
-      highlightInElements(".search-title");
-    } else if (scope === "content") {
-      highlightInElements(".search-content");
-    } else if (scope === "author") {
-      highlightInElements(".search-author");
-    } else if (scope === "topic") {
-      highlightInElements(".search-topic");
-    } else { // all
-      highlightInElements(".search-title");
-      highlightInElements(".search-content");
-      highlightInElements(".search-author");
-      highlightInElements(".search-topic");
-    }
-  })();
-</script>
+  <script>
+    (function(){
+      const q = "{{ q | e }}".trim();
+      const scope = "{{ scope | e }}";
+      if (!q) return;
+      function highlight(selector){ document.querySelectorAll(selector).forEach(el=>{ const text=el.textContent||''; const idx=text.toLowerCase().indexOf(q.toLowerCase()); if(idx===-1) return; const before=text.slice(0,idx); const match=text.slice(idx,idx+q.length); const after=text.slice(idx+q.length); el.innerHTML = escapeHtml(before)+"<mark class='search-hit'>"+escapeHtml(match)+"</mark>"+escapeHtml(after); }); }
+      function escapeHtml(s){ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+      if (scope==='title') highlight('.search-title'); else if(scope==='content') highlight('.search-content'); else if(scope==='author') highlight('.search-author'); else if(scope==='topic') highlight('.search-topic'); else { highlight('.search-title'); highlight('.search-content'); highlight('.search-author'); highlight('.search-topic'); }
+    })();
+  </script>
 
 </body>
 </html>

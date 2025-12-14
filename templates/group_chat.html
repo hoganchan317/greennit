@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>{{ group.name }} - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="flex gap-6">
+    <!-- 左侧聊天区域 -->
+    <div class="flex-1">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <a href="/groups" class="text-slate-400 hover:text-white text-sm">← 返回群组列表</a>
+          <h1 class="text-2xl font-bold flex items-center gap-2">
+            {{ group.name }}
+            <span id="onlineCount" class="text-sm text-emerald-400 font-normal"></span>
+          </h1>
+          {% if group.description %}
+            <p class="text-slate-400 text-sm">{{ group.description }}</p>
+          {% endif %}
+        </div>
+        <div class="flex gap-2">
+          {% if role in ['owner', 'admin'] %}
+            <a href="/groups/{{ group.id }}/invite" class="px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+              邀请成员
+            </a>
+          {% endif %}
+          {% if role != 'owner' %}
+            <form method="post" action="/groups/{{ group.id }}/leave" onsubmit="return confirm('确定要退出群组吗？')">
+              <button type="submit" class="px-3 py-1 rounded bg-red-500 hover:bg-red-600 text-sm">
+                退出群组
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 邀请码区域（仅群主和管理员可见） -->
+      {% if role in ['owner', 'admin'] %}
+        <div class="bg-slate-800/60 rounded-lg p-3 mb-4 flex justify-between items-center">
+          <div>
+            <span class="text-slate-400 text-sm">邀请码：</span>
+            <span id="inviteCode" class="text-emerald-400 font-mono text-lg tracking-widest">{{ group.invite_code or '未生成' }}</span>
+            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">复制链接</button>
+          </div>
+          {% if role == 'owner' %}
+            <form method="post" action="/groups/{{ group.id }}/regenerate_invite" onsubmit="return confirm('重置后旧邀请码将失效，确定吗？')">
+              <button type="submit" class="text-xs text-slate-400 hover:text-white">重置邀请码</button>
+            </form>
+          {% endif %}
+        </div>
+      {% endif %}
+
+      <div class="bg-slate-800/80 rounded-xl p-4 flex flex-col h-[60vh]">
+        <div id="messages" class="flex-1 overflow-y-auto space-y-3 px-1">
+          {% if messages %}
+            {% for m in messages %}
+              <div class="flex {% if m.sender_id == current_user_id %}justify-end{% else %}justify-start{% endif %}">
+                <div class="rounded-xl p-3 max-w-[70%] {% if m.sender_id == current_user_id %}bg-emerald-600/80{% else %}bg-slate-700/80{% endif %}">
+                  {% if m.sender_id != current_user_id %}
+                    <div class="text-xs text-sky-400 mb-1">{{ m.sender_username }}</div>
+                  {% endif %}
+                  <div class="text-sm">{{ m.content }}</div>
+                  <div class="text-xs text-slate-400 mt-1">
+                    {{ m.created_at.strftime('%H:%M') if m.created_at else '' }}
+                  </div>
+                </div>
+              </div>
+            {% endfor %}
+          {% else %}
+            <div class="text-center text-slate-400 py-6">暂无消息，开始聊天吧！</div>
+          {% endif %}
+        </div>
+
+        <div class="mt-3">
+          <form id="messageForm" class="flex gap-2">
+            <input id="messageInput" name="content" required
+                   class="flex-1 rounded px-3 py-2 bg-slate-900 text-slate-100 border border-slate-700"
+                   placeholder="输入消息..." autocomplete="off">
+            <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">
+              发送
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <!-- 右侧成员列表 -->
+    <div class="w-72 hidden lg:block">
+      <h2 class="text-lg font-bold mb-3">成员 ({{ members|length }})</h2>
+      <div class="bg-slate-800/80 rounded-xl p-3 space-y-2 max-h-[70vh] overflow-y-auto">
+        {% for m in members %}
+          <div class="flex justify-between items-center p-2 rounded hover:bg-slate-700/50">
+            <div class="flex items-center gap-1">
+              <a href="/user/{{ m.username }}" class="text-sm hover:underline">{{ m.username }}</a>
+              {% if m.role == 'owner' %}
+                <span class="text-xs text-amber-400">群主</span>
+              {% elif m.role == 'admin' %}
+                <span class="text-xs text-sky-400">管理</span>
+              {% endif %}
+              {% if m.is_muted %}
+                <span class="text-xs text-red-400">🔇</span>
+              {% endif %}
+            </div>
+            {% if role in ['owner', 'admin'] and m.username != username and m.role != 'owner' %}
+              <div class="flex gap-1">
+                {% if not m.is_muted %}
+                  <form method="post" action="/groups/{{ group.id }}/mute/{{ m.username }}" class="inline">
+                    <input type="hidden" name="duration" value="60">
+                    <button type="submit" class="text-xs text-amber-400 hover:text-amber-300" title="禁言1小时">🔇</button>
+                  </form>
+                {% else %}
+                  <form method="post" action="/groups/{{ group.id }}/unmute/{{ m.username }}" class="inline">
+                    <button type="submit" class="text-xs text-emerald-400 hover:text-emerald-300" title="解除禁言">🔊</button>
+                  </form>
+                {% endif %}
+                {% if role == 'owner' or (role == 'admin' and m.role == 'member') %}
+                  <form method="post" action="/groups/{{ group.id }}/kick/{{ m.username }}" onsubmit="return confirm('确定踢出这个成员吗？')">
+                    <button type="submit" class="text-xs text-red-400 hover:text-red-300">踢出</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+document.documentElement.style.visibility='visible';
+
+const groupId = {{ group.id }};
+const currentUserId = {{ current_user_id }};
+const currentUsername = "{{ username }}";
+const messagesDiv = document.getElementById('messages');
+const messageForm = document.getElementById('messageForm');
+const messageInput = document.getElementById('messageInput');
+const onlineCountSpan = document.getElementById('onlineCount');
+
+// 滚动到底部
+messagesDiv.scrollTop = messagesDiv.scrollHeight;
+
+// 复制邀请链接
+function copyInviteLink() {
+    const code = "{{ group.invite_code or '' }}";
+    if (!code) {
+        alert('邀请码未生成');
+        return;
+    }
+    const link = location.origin + '/groups/join?code=' + code;
+    navigator.clipboard.writeText(link).then(function() {
+        alert('邀请链接已复制！');
+    }).catch(function() {
+        prompt('复制此链接:', link);
+    });
+}
+
+// WebSocket 连接
+const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+let ws;
+
+function connectWebSocket() {
+    ws = new WebSocket(wsProtocol + '//' + location.host + '/ws/group/' + groupId);
+
+    ws.onopen = function() {
+        console.log('群聊 WebSocket 已连接');
+    };
+
+    ws.onmessage = function(event) {
+        const data = JSON.parse(event.data);
+
+        if (data.type === 'new_message') {
+            const isMe = data.sender_id === currentUserId;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'flex ' + (isMe ? 'justify-end' : 'justify-start');
+
+            let html = '<div class="rounded-xl p-3 max-w-[70%] ' + (isMe ? 'bg-emerald-600/80' : 'bg-slate-700/80') + '">';
+            if (!isMe) {
+                html += '<div class="text-xs text-sky-400 mb-1">' + escapeHtml(data.sender_username) + '</div>';
+            }
+            html += '<div class="text-sm">' + escapeHtml(data.content) + '</div>';
+            html += '<div class="text-xs text-slate-400 mt-1">' + data.created_at + '</div>';
+            html += '</div>';
+
+            wrapper.innerHTML = html;
+            messagesDiv.appendChild(wrapper);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        } else if (data.type === 'online_count') {
+            onlineCountSpan.textContent = '(' + data.count + ' 人在线)';
+        } else if (data.type === 'error') {
+            alert(data.message);
+        }
+    };
+
+    ws.onclose = function() {
+        console.log('群聊 WebSocket 已断开，3秒后重连...');
+        setTimeout(connectWebSocket, 3000);
+    };
+}
+
+connectWebSocket();
+
+// 转义 HTML
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+// 发送消息
+messageForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const content = messageInput.value.trim();
+    if (!content) return;
+
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({
+            type: 'message',
+            content: content
+        }));
+        messageInput.value = '';
+    } else {
+        alert('连接已断开，请刷新页面重试');
+    }
+});
+</script>
+</body>
+</html>

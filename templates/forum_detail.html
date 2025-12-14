@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>{{ forum.name }} - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="flex gap-6">
+    <!-- 左侧主内容 -->
+    <div class="flex-1">
+      <a href="/forums" class="text-slate-400 hover:text-white text-sm">← 返回论坛列表</a>
+      
+      <div class="flex justify-between items-start mt-2 mb-4">
+        <div>
+          <h1 class="text-2xl font-bold">{{ forum.name }}</h1>
+          {% if forum.description %}
+            <p class="text-slate-400">{{ forum.description }}</p>
+          {% endif %}
+          <div class="text-xs text-slate-500 mt-1">创建于 {{ forum.created_at.strftime('%Y-%m-%d %H:%M') if forum.created_at else '' }}</div>
+        </div>
+        <div class="flex gap-2">
+          {% if role in ['admin', 'moderator'] %}
+            <a href="/forums/{{ forum.id }}/new_post" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+              发帖
+            </a>
+            <a href="/forums/{{ forum.id }}/members" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">
+              管理成员
+            </a>
+          {% elif role == 'member' %}
+            <a href="/forums/{{ forum.id }}/new_post" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+              发帖
+            </a>
+          {% else %}
+            <form method="post" action="/forums/join">
+              <input type="hidden" name="code" value="{{ forum.invite_code }}">
+              <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+                加入论坛
+              </button>
+            </form>
+          {% endif %}
+        </div>
+      </div>
+
+      <!-- 邀请码区域（仅管理员可见） -->
+      {% if role == 'admin' %}
+        <div class="bg-slate-800/60 rounded-lg p-3 mb-4 flex justify-between items-center">
+          <div>
+            <span class="text-slate-400 text-sm">邀请码：</span>
+            <span class="text-emerald-400 font-mono text-lg tracking-widest">{{ forum.invite_code or '未生成' }}</span>
+            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">复制链接</button>
+          </div>
+        </div>
+      {% endif %}
+
+      <!-- 帖子列表 -->
+      <div class="space-y-3">
+        {% if posts %}
+          {% for p in posts %}
+            <a href="/post/{{ p.id }}" class="block p-4 bg-slate-800/80 rounded-xl hover:bg-slate-700/80">
+              <div class="font-medium text-lg">{{ p.title }}</div>
+              <div class="text-sm text-slate-400 mt-1">{{ p.content[:100] }}{% if p.content|length > 100 %}...{% endif %}</div>
+              <div class="flex gap-4 mt-2 text-xs text-slate-500">
+                <span>{{ p.author }}</span>
+                <span>{{ p.created_at.strftime('%Y-%m-%d %H:%M') if p.created_at else '' }}</span>
+                <span>💬 {{ p.comment_count }}</span>
+                <span>❤️ {{ p.like_count }}</span>
+              </div>
+            </a>
+          {% endfor %}
+          
+          <!-- 分页 -->
+          {% if total_pages > 1 %}
+            <div class="flex justify-center gap-2 mt-4">
+              {% if page > 1 %}
+                <a href="/forums/{{ forum.id }}?page={{ page - 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">上一页</a>
+              {% endif %}
+              <span class="px-3 py-1 text-slate-400 text-sm">{{ page }} / {{ total_pages }}</span>
+              {% if page < total_pages %}
+                <a href="/forums/{{ forum.id }}?page={{ page + 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">下一页</a>
+              {% endif %}
+            </div>
+          {% endif %}
+        {% else %}
+          <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+            暂无帖子。
+            {% if role %}
+              <a href="/forums/{{ forum.id }}/new_post" class="text-emerald-400 hover:underline ml-1">发布第一个帖子</a>
+            {% endif %}
+          </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- 右侧成员列表 -->
+    <div class="w-64 hidden lg:block">
+      <h2 class="text-lg font-bold mb-3">成员 ({{ members|length }})</h2>
+      <div class="bg-slate-800/80 rounded-xl p-3 space-y-2 max-h-[60vh] overflow-y-auto">
+        {% for m in members %}
+          <div class="flex justify-between items-center p-2 rounded hover:bg-slate-700/50">
+            <div class="flex items-center gap-1">
+              <a href="/user/{{ m.username }}" class="text-sm hover:underline">{{ m.username }}</a>
+              {% if m.role == 'admin' %}
+                <span class="text-xs text-amber-400">管理</span>
+              {% elif m.role == 'moderator' %}
+                <span class="text-xs text-sky-400">版主</span>
+              {% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+document.documentElement.style.visibility='visible';
+
+function copyInviteLink() {
+    const code = "{{ forum.invite_code or '' }}";
+    if (!code) {
+        alert('邀请码未生成');
+        return;
+    }
+    const link = location.origin + '/forums/join?code=' + code;
+    navigator.clipboard.writeText(link).then(function() {
+        alert('邀请链接已复制！');
+    }).catch(function() {
+        prompt('复制此链接:', link);
+    });
+}
+</script>
+</body>
+</html>

@@ -2,257 +2,159 @@
 <html lang="zh">
 <head>
     <meta charset="utf-8">
-    <title>{{ post.title }} - Greennit</title>
+    <title>{{ post.title if post is defined else '帖子详情 - Greennit' }}</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>html{visibility:hidden}</style>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-<div class="max-w-6xl mx-auto px-4 py-8">
+    <div class="max-w-6xl mx-auto px-4 py-8">
 
-    {% include "_navbar.html" %}
+        {% include "_navbar.html" %}
 
-    <!-- 帖子内容 -->
-    <article class="mt-2 bg-slate-800/80 rounded-xl p-5">
-        <div class="flex justify-between items-start mb-2">
-            <h1 class="text-2xl font-bold">{{ post.title }}</h1>
+        <!-- 帖子内容（只出现一次） -->
+        <main class="mt-6">
+            <div class="bg-slate-800/60 rounded-lg p-6">
+                {% if post %}
+                    <h1 class="text-2xl font-bold">{{ post.title }}</h1>
+                    <div class="text-sm text-slate-400 mt-1">by <a href="/user/{{ post.username }}" class="text-sky-300">{{ post.username }}</a> · {{ post.created_at }}</div>
+                    <article class="mt-4 prose prose-invert max-w-none text-slate-200 whitespace-pre-wrap">{{ post.content }}</article>
 
-            {% if username and (is_author or is_admin) %}
-            <div class="flex flex-col gap-2 items-end">
-                <a href="/post/{{ post.id }}/edit"
-                   class="text-xs text-sky-300 border border-sky-500/60 px-3 py-1 rounded hover:bg-sky-500/20">
-                    编辑
-                </a>
-
-                <form method="post"
-                      action="/post/{{ post.id }}/delete"
-                      onsubmit="return confirm('确定要删除这个帖子吗？删除后将不可恢复。');">
-                    <button class="text-xs text-red-300 border border-red-500/70 px-3 py-1 rounded hover:bg-red-500/20">
-                        删除帖子
-                    </button>
-                </form>
-            </div>
-            {% endif %}
-        </div>
-
-        <!-- 帖子信息 + 点赞按钮 + 举报按钮 -->
-        <div class="flex justify-between items-center mb-4">
-            <div class="text-xs text-slate-400">
-                {% if post.topic_name %}
-                    <span class="mr-2 text-emerald-300">[{{ post.topic_name }}]</span>
-                {% endif %}
-                by
-                <a href="/user/{{ post.username }}" class="text-sky-400 hover:underline">
-                    {{ post.username }}
-                </a>
-                                {% if username and username != post.username %}
-                                    <a href="/messages/{{ post.username }}" title="发消息" class="ml-2 text-slate-300 hover:text-emerald-300">
-                                        <!-- message icon -->
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 inline-block" viewBox="0 0 20 20" fill="currentColor">
-                                            <path d="M2 5a2 2 0 012-2h12a2 2 0 012 2v8a2 2 0 01-2 2H6l-4 4V5z" />
-                                        </svg>
-                                    </a>
-                                {% endif %}
-                ·
-                {{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else post.created_at }}
-                <span class="ml-2 text-emerald-300 text-xs">
-                    ❤ {{ likes_count }}
-                </span>
-            </div>
-            <div class="flex items-center gap-2">
-                {% if username %}
-                    <form method="post" action="/post/{{ post.id }}/like">
-                        <button class="text-xs px-2 py-1 rounded border
-                                    {% if user_liked %}
-                                        bg-rose-500/80 border-rose-400 hover:bg-rose-500
-                                    {% else %}
-                                        text-rose-300 border-rose-400/60 hover:bg-rose-500/20
-                                    {% endif %}">
-                            {% if user_liked %}取消赞{% else %}点赞{% endif %}
-                        </button>
-                    </form>
-                    <form method="post" action="/report/post/{{ post.id }}"
-                          onsubmit="return confirm('确定要举报这个帖子吗？');">
-                        <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded hover:bg-amber-500/20">
-                            举报帖子
-                        </button>
-                    </form>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="whitespace-pre-wrap text-sm leading-relaxed">
-            {{ post.content }}
-        </div>
-    </article>
-
-    <!-- 在线人数 & 正在输入状态 -->
-    <div class="mt-2 text-xs text-slate-400 flex gap-4">
-        <span id="online-count">在线人数：1</span>
-        <span id="typing-status"></span>
-    </div>
-
-    <!-- 评论列表 -->
-    <section class="mt-6">
-        <h2 class="text-lg font-semibold mb-3">评论</h2>
-        <div id="comment-list" class="space-y-3">
-            {% if comments %}
-                {% for c in comments %}
-                    <div class="bg-slate-800/70 rounded-lg p-3">
-                        <div class="flex justify-between items-center mb-1">
-                            <div class="text-xs text-slate-400">
-                                {{ c[3] }} · {{ c[2].strftime('%Y-%m-%d %H:%M') if c[2] else '' }}
-                            </div>
-                            <div class="flex items-center gap-2">
-                                {# 管理员 或 评论作者 本人 才能看到删评按钮 #}
-                                {% if username and (is_admin or username == c[3]) %}
-                                    {# 管理员走 admin 接口，普通作者走通用接口，两者都可以用通用接口，这里我们统一用新的 /comment/{id}/delete #}
-                                    <form method="post"
-                                        action="/comment/{{ c[0] }}/delete"
-                                        onsubmit="return confirm('确定要删除这条评论吗？');">
-                                        <input type="hidden" name="post_id" value="{{ post.id }}">
-                                        <button class="text-xs text-red-400 border border-red-500/50 px-2 py-1 rounded hover:bg-red-500/20">
-                                            删评
-                                        </button>
-                                    </form>
-                                {% endif %}
-
-                                {% if username %}
-                                    <form method="post"
-                                        action="/report/comment/{{ c[0] }}"
-                                        onsubmit="return confirm('确定要举报这条评论吗？');">
-                                        <input type="hidden" name="post_id" value="{{ post.id }}">
-                                        <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded hover:bg-amber-500/20">
-                                            举报
-                                        </button>
-                                    </form>
-                                {% endif %}
-                            </div>
+                    <div class="mt-4 flex justify-between items-center">
+                        <div class="text-xs text-slate-400">
+                            {% if post.topic_name %}<span class="text-emerald-300 mr-2">[{{ post.topic_name }}]</span>{% endif %}
+                            发布于 {{ post.created_at.strftime('%Y-%m-%d %H:%M') if post.created_at else '' }}
+                            <span class="ml-3 text-emerald-300">❤ {{ likes_count }}</span>
                         </div>
-                        <div class="text-sm whitespace-pre-wrap">
-                            {{ c[1] }}
+
+                        <div class="flex items-center gap-2">
+                            {% if username %}
+                                <form method="post" action="/post/{{ post.id }}/like">
+                                    <button class="text-xs px-2 py-1 rounded border {% if user_liked %}bg-rose-500/80 border-rose-400{% else %}text-rose-300 border-rose-400/60{% endif %}">{% if user_liked %}取消赞{% else %}点赞{% endif %}</button>
+                                </form>
+                                <form method="post" action="/report/post/{{ post.id }}" onsubmit="return confirm('确定要举报这个帖子吗？');">
+                                    <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded">举报帖子</button>
+                                </form>
+                                {% if is_author or is_admin %}
+                                    <a href="/post/{{ post.id }}/edit" class="text-xs px-2 py-1 rounded bg-sky-500 text-white">编辑</a>
+                                {% endif %}
+                            {% endif %}
                         </div>
                     </div>
-                {% endfor %}
-            {% else %}
-                <div class="text-sm text-slate-500">
-                    还没有评论，快来抢沙发～
+
+                {% else %}
+                    <div class="text-slate-400">未找到该帖子。</div>
+                {% endif %}
+            </div>
+
+            <!-- 评论区 -->
+            <section class="mt-6">
+                <h2 class="text-lg font-semibold mb-3">评论</h2>
+                <div id="comment-list" class="space-y-3">
+                    {% if comments %}
+                        {% for c in comments %}
+                            <div class="bg-slate-800/70 rounded-lg p-3">
+                                <div class="flex justify-between items-center mb-1">
+                                    <div class="text-xs text-slate-400">{{ c[3] }} · {{ c[2].strftime('%Y-%m-%d %H:%M') if c[2] else '' }}</div>
+                                    <div class="flex items-center gap-2">
+                                        {% if username and (is_admin or username == c[3]) %}
+                                            <form method="post" action="/comment/{{ c[0] }}/delete" onsubmit="return confirm('确定要删除这条评论吗？');">
+                                                <input type="hidden" name="post_id" value="{{ post.id }}">
+                                                <button class="text-xs text-red-400 border border-red-500/50 px-2 py-1 rounded">删评</button>
+                                            </form>
+                                        {% endif %}
+                                        {% if username %}
+                                            <form method="post" action="/report/comment/{{ c[0] }}" onsubmit="return confirm('确定要举报这条评论吗？');">
+                                                <input type="hidden" name="post_id" value="{{ post.id }}">
+                                                <button class="text-xs text-amber-300 border border-amber-400/60 px-2 py-1 rounded">举报</button>
+                                            </form>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                <div class="text-sm whitespace-pre-wrap">{{ c[1] }}</div>
+                            </div>
+                        {% endfor %}
+                    {% else %}
+                        <div class="text-sm text-slate-500">还没有评论，快来抢沙发～</div>
+                    {% endif %}
                 </div>
-            {% endif %}
-        </div>
-    </section>
+            </section>
 
-    <!-- 发表评论 -->
-    <section class="mt-6">
-        {% if username %}
-            <form method="post" action="/comment" class="space-y-3">
-                <input type="hidden" name="post_id" value="{{ post.id }}">
-                <label class="block text-sm text-slate-300 mb-1">发表评论（{{ username }}）</label>
-                <textarea id="comment-input" name="content" rows="4" required
-                          class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
-                <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">
-                    提交评论
-                </button>
-            </form>
-        {% else %}
-            <p class="text-sm text-slate-400 mt-2">
-                你还没有登录，<a href="/login" class="text-emerald-400 underline">登录后才能评论</a>。
-            </p>
-        {% endif %}
-    </section>
-</div>
+            <!-- 发表评论 -->
+            <section class="mt-6">
+                {% if username %}
+                    <form method="post" action="/comment" class="space-y-3">
+                        <input type="hidden" name="post_id" value="{{ post.id }}">
+                        <label class="block text-sm text-slate-300 mb-1">发表评论（{{ username }}）</label>
+                        <textarea id="comment-input" name="content" rows="4" required class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                        <div class="flex justify-end">
+                            <button class="px-4 py-2 bg-emerald-500 rounded text-sm font-semibold">提交评论</button>
+                        </div>
+                    </form>
+                {% else %}
+                    <p class="text-sm text-slate-400 mt-2">你还没有登录，<a href="/login" class="text-emerald-400 underline">登录后才能评论</a>。</p>
+                {% endif %}
+            </section>
+        </main>
 
-<script>
-    // 当前帖子的 id，由后端渲染
-    const postId = Number("{{ post.id }}");
-    const currentUser = "{{ username or '' }}";  // 当前登录用户（未登录则为空字符串）
-    const commentList = document.getElementById('comment-list');
-    const onlineCountSpan = document.getElementById('online-count');
-    const typingStatusSpan = document.getElementById('typing-status');
-    const commentInput = document.getElementById('comment-input');
+    </div>
 
-    function addCommentToDOM(c) {
-        // 如果是第一次评论，要清掉“还没有评论”的提示
-        if (commentList.children.length === 1 &&
-            commentList.children[0].textContent.includes('还没有评论')) {
-            commentList.innerHTML = '';
+    <script>
+        const postId = Number("{{ post.id if post is defined else 0 }}");
+        const currentUser = "{{ username or '' }}";
+        const commentList = document.getElementById('comment-list');
+        const commentInput = document.getElementById('comment-input');
+
+        function addCommentToDOM(c) {
+            if (!commentList) return;
+            // remove empty placeholder
+            if (commentList.children.length === 1 && commentList.children[0].textContent.includes('还没有评论')) {
+                commentList.innerHTML = '';
+            }
+            const div = document.createElement('div');
+            div.className = 'bg-slate-800/70 rounded-lg p-3';
+            div.innerHTML = `<div class="flex justify-between items-center mb-1"><div class="text-xs text-slate-400">${escapeHtml(c.username)} · ${escapeHtml(c.created_at)}</div></div><div class="text-sm whitespace-pre-wrap">${escapeHtml(c.content)}</div>`;
+            commentList.appendChild(div);
         }
 
-        const div = document.createElement('div');
-        div.className = "bg-slate-800/70 rounded-lg p-3";
-        div.innerHTML = `
-            <div class="flex justify-between items-center mb-1">
-              <div class="text-xs text-slate-400">
-                  ${c.username} · ${c.created_at}
-              </div>
-            </div>
-            <div class="text-sm whitespace-pre-wrap">
-                ${c.content}
-            </div>
-        `;
-        commentList.appendChild(div);
-    }
+        function escapeHtml(str) {
+            if (!str) return '';
+            return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+        }
 
-    // 建立 WebSocket 连接
-    const wsProtocol = (location.protocol === "https:") ? "wss://" : "ws://";
-    const wsUrl = wsProtocol + location.host + "/ws/comments/" + postId;
-    const ws = new WebSocket(wsUrl);
-
-    ws.onmessage = function (event) {
+        // WebSocket (comments)
         try {
-            const data = JSON.parse(event.data);
+            const wsProtocol = (location.protocol === 'https:') ? 'wss://' : 'ws://';
+            const wsUrl = wsProtocol + location.host + '/ws/comments/' + postId;
+            const ws = new WebSocket(wsUrl);
 
-            if (data.type === "new_comment") {
-                // 自己发的评论在刷新后的 HTML 里已经有了，这里只插入别人的
-                if (data.username !== currentUser) {
-                    addCommentToDOM(data);
-                }
+            ws.onmessage = function (event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'new_comment') {
+                        if (data.username !== currentUser) addCommentToDOM(data);
+                    }
+                } catch (e) { console.error('WS parse', e); }
+            };
+        } catch (e) { console.warn('WS not available', e); }
 
-            } else if (data.type === "online_count") {
-                onlineCountSpan.textContent = "在线人数：" + data.count;
-
-            } else if (data.type === "typing") {
-                if (!data.users || data.users.length === 0) {
-                    typingStatusSpan.textContent = "";
-                } else {
-                    const names = data.users.join("、");
-                    typingStatusSpan.textContent = names + " 正在输入...";
-                }
-            }
-        } catch (e) {
-            console.error("WS message parse error", e, event.data);
+        // typing indicator
+        if (commentInput && typeof WebSocket !== 'undefined') {
+            let typingTimeout = null;
+            commentInput.addEventListener('input', () => {
+                // send typing state if ws exists
+                try {
+                    if (typeof ws !== 'undefined' && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({ type: 'typing', is_typing: true }));
+                    }
+                } catch (e) {}
+                if (typingTimeout) clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => {
+                    try { if (typeof ws !== 'undefined' && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'typing', is_typing: false })); } catch (e) {}
+                }, 2000);
+            });
         }
-    };
-
-    ws.onopen = function () {
-        console.log("评论 WebSocket 连接成功:", wsUrl);
-    };
-
-    ws.onclose = function () {
-        console.log("评论 WebSocket 连接关闭");
-    };
-
-    // 监听输入框，发送 typing 状态
-    let typingTimeout = null;
-    if (commentInput) {
-        commentInput.addEventListener('input', () => {
-            // 一旦有输入，就告知“正在输入中”
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: "typing", is_typing: true }));
-            }
-
-            // 停止输入 2 秒后，自动发送“停止输入”
-            if (typingTimeout) {
-                clearTimeout(typingTimeout);
-            }
-            typingTimeout = setTimeout(() => {
-                if (ws.readyState === WebSocket.OPEN) {
-                    ws.send(JSON.stringify({ type: "typing", is_typing: false }));
-                }
-            }, 2000);
-        });
-    }
-</script>
-<script>document.documentElement.style.visibility='visible'</script>
-
+    </script>
+    <script>document.documentElement.style.visibility='visible'</script>
 </body>
 </html>

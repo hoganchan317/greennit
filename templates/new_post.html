@@ -5,45 +5,42 @@
     <title>发新帖 - Greennit</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>html{visibility:hidden}</style>
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
-<div class="max-w-6xl mx-auto px-4 py-8">
-    {% include "_navbar.html" %}
+    <div class="max-w-6xl mx-auto px-4 py-8">
+        {% include "_navbar.html" %}
 
-    <h1 class="text-3xl font-bold mt-4 mb-6">发新帖</h1>
+        <div class="mt-6 bg-slate-800/60 rounded-lg p-6">
+            <h1 class="text-3xl font-bold mb-4">发新帖</h1>
+            <form method="post" class="space-y-4">
+                <div>
+                    <label class="block mb-1 text-sm text-slate-300">标题</label>
+                    <input name="title" required class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                </div>
 
-    <form method="post" class="space-y-4">
-    <div>
-        <label class="block mb-1 text-sm text-slate-300">标题</label>
-        <input name="title" required
-            class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                <div>
+                    <label class="block mb-1 text-sm text-slate-300">板块 / 分类</label>
+                    <select name="topic_id" class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700">
+                        <option value="">（不选择）</option>
+                        {% for t in topics %}
+                            <option value="{{ t[0] }}">{{ t[1] }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="text-xs text-slate-400 mt-1">若要创建新板块，请在首页提交申请。</p>
+                </div>
+
+                <div>
+                    <label class="block mb-1 text-sm text-slate-300">内容</label>
+                    <textarea name="content" rows="8" required class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
+                </div>
+
+                <div class="flex justify-end">
+                    <button class="px-6 py-2 bg-emerald-500 rounded font-semibold text-sm">发布</button>
+                </div>
+            </form>
+        </div>
     </div>
-
-    <div>
-    <label class="block mb-1 text-sm text-slate-300">板块 / 分类（aspect）</label>
-    <select name="topic_id"
-            class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600">
-        <option value="">（不选择）</option>
-        {% for t in topics %}
-        <option value="{{ t[0] }}">{{ t[1] }}</option>
-        {% endfor %}
-    </select>
-    <p class="text-xs text-slate-400 mt-1">
-        若你想创建新的板块，请在首页点击「创建板块」按钮向管理员提交申请。
-    </p>
-    </div>
-
-    <div>
-        <label class="block mb-1 text-sm text-slate-300">内容</label>
-        <textarea name="content" rows="8" required
-                class="w-full px-3 py-2 rounded bg-slate-800 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500"></textarea>
-    </div>
-
-    <button class="px-6 py-2 bg-emerald-500 rounded font-semibold text-sm">
-        发布
-    </button>
-    </form>
-</div>
-<script>document.documentElement.style.visibility='visible'</script>
-</body>
+    <script>document.documentElement.style.visibility='visible'</script>
+    </body>
 </html>

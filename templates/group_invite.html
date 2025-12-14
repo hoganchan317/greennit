@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>邀请成员 - {{ group.name }} - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <a href="/groups/{{ group.id }}" class="text-slate-400 hover:text-white text-sm">← 返回 {{ group.name }}</a>
+  <h1 class="text-2xl font-bold mb-4 mt-2">邀请成员</h1>
+
+  <div class="bg-slate-800/80 rounded-xl p-4 max-w-xl">
+    <form method="get" action="/groups/{{ group.id }}/invite" class="flex gap-2 mb-4">
+      <input name="q" type="text" value="{{ q or '' }}"
+             class="flex-1 px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+             placeholder="搜索用户名...">
+      <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">搜索</button>
+    </form>
+
+    {% if q %}
+      {% if users %}
+        <div class="space-y-2">
+          {% for u in users %}
+            <div class="flex justify-between items-center p-3 rounded bg-slate-700/60">
+              <div>
+                <span class="text-slate-100">{{ u.username }}</span>
+                {% if u.is_admin %}
+                  <span class="text-xs text-amber-400 ml-1">站点管理员</span>
+                {% endif %}
+              </div>
+              <form method="post" action="/groups/{{ group.id }}/invite/{{ u.username }}">
+                <button type="submit" class="px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+                  邀请
+                </button>
+              </form>
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="text-center text-slate-400 py-4">未找到用户</div>
+      {% endif %}
+    {% else %}
+      <div class="text-center text-slate-400 py-4">输入用户名搜索要邀请的成员</div>
+    {% endif %}
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

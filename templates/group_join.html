@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>通过邀请码加入群组 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="max-w-2xl mx-auto p-4 bg-slate-800/80 rounded-xl">
+    <h2 class="text-2xl font-bold mb-4">通过邀请码加入群组</h2>
+    <form method="post" action="/groups/join" class="space-y-3">
+      <div>
+        <label class="block text-sm text-slate-400">邀请码</label>
+        <input name="code" required class="mt-1 block w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-slate-100" />
+      </div>
+      <div>
+        <button type="submit" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded-lg text-slate-900 font-semibold">加入</button>
+        <a href="/groups" class="ml-3 text-sky-400 hover:underline">返回群组</a>
+      </div>
+    </form>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

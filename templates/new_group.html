@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>创建群组 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <h1 class="text-2xl font-bold mb-6">创建群组</h1>
+
+  <div class="bg-slate-800/80 rounded-xl p-6 max-w-xl">
+    <form method="post" action="/groups/new">
+      <div class="mb-4">
+        <label class="block text-sm text-slate-400 mb-2">群组名称 *</label>
+        <input type="text" name="name" required
+               class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+               placeholder="例如：技术交流群">
+      </div>
+      
+      <div class="mb-6">
+        <label class="block text-sm text-slate-400 mb-2">群组简介</label>
+        <textarea name="description" rows="3"
+                  class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100"
+                  placeholder="可选，简单介绍一下这个群组"></textarea>
+      </div>
+      
+      <div class="flex gap-3">
+        <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">
+          创建群组
+        </button>
+        <a href="/groups" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600">
+          取消
+        </a>
+      </div>
+    </form>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

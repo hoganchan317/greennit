@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>加入论坛 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <a href="/forums" class="text-slate-400 hover:text-white text-sm">← 返回论坛列表</a>
+  <h1 class="text-2xl font-bold mt-2 mb-6">加入论坛</h1>
+
+  <div class="bg-slate-800/80 rounded-xl p-6 max-w-md">
+    {% if error %}
+      <div class="bg-red-500/20 border border-red-500 rounded p-3 mb-4 text-red-300">
+        {{ error }}
+      </div>
+    {% endif %}
+
+    {% if forum and not already_member %}
+      <!-- 找到论坛，确认加入 -->
+      <div class="mb-6">
+        <h2 class="text-xl font-bold text-emerald-400">{{ forum.name }}</h2>
+        {% if forum.description %}
+          <p class="text-slate-400 mt-2">{{ forum.description }}</p>
+        {% endif %}
+        {% if forum.is_private %}
+          <span class="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-400 mt-2 inline-block">私有论坛</span>
+        {% else %}
+          <span class="text-xs px-2 py-1 rounded bg-emerald-500/20 text-emerald-400 mt-2 inline-block">公开论坛</span>
+        {% endif %}
+      </div>
+      <form method="post" action="/forums/join">
+        <input type="hidden" name="code" value="{{ code }}">
+        <button type="submit" class="w-full px-4 py-3 rounded bg-emerald-500 hover:bg-emerald-600 font-bold">
+          加入论坛
+        </button>
+      </form>
+
+    {% elif already_member %}
+      <!-- 已经是成员 -->
+      <div class="text-center py-4">
+        <p class="text-slate-400 mb-4">你已经是「{{ forum.name }}」的成员</p>
+        <a href="/forums/{{ forum.id }}" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 inline-block">
+          进入论坛
+        </a>
+      </div>
+
+    {% else %}
+      <!-- 输入邀请码 -->
+      <form method="get" action="/forums/join">
+        <div class="mb-4">
+          <label class="block text-sm text-slate-400 mb-2">输入邀请码</label>
+          <input type="text" name="code" value="{{ code or '' }}" required
+                 class="w-full px-3 py-2 rounded bg-slate-900 border border-slate-700 text-slate-100 text-center text-xl tracking-widest"
+                 placeholder="XXXXXXXX" maxlength="20">
+        </div>
+        <button type="submit" class="w-full px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">
+          查找论坛
+        </button>
+      </form>
+      <div class="mt-4 text-center text-sm text-slate-500">
+        向论坛管理员索取邀请码即可加入私有论坛
+      </div>
+    {% endif %}
+
+    <div class="mt-6 text-center">
+      <a href="/forums" class="text-slate-400 hover:text-white text-sm">← 返回论坛列表</a>
+    </div>
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

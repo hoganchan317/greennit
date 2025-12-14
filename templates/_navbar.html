@@ -1,66 +1,46 @@
-<!-- 顶部导航（通用） -->
-<div class="max-w-6xl mx-auto px-4 py-4">
-  <nav class="w-full flex items-center justify-between gap-4 flex-wrap">
-    <!-- Left: Back / Logo -->
-    <div class="flex items-center gap-3 min-w-0">
-      {% if not (hide_back is defined and hide_back) %}
-        <a href="/" class="text-slate-400 text-sm hidden sm:inline-block">&larr; 返回</a>
-      {% endif %}
-      <a href="/" class="flex items-baseline gap-3 no-underline">
-        <h1 class="text-xl sm:text-2xl md:text-3xl font-bold text-orange-300 leading-none">Greennit</h1>
-        <span class="text-xs text-slate-400 hidden sm:inline">一个可以发帖、评论、实时聊天的小社区</span>
-      </a>
+<!DOCTYPE html>
+<!-- 通用顶部导航（统一样式） -->
+<nav class="bg-slate-800/80 text-slate-100">
+  <div class="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
+    <div class="flex items-center gap-4">
+      <a href="/" class="text-xl font-bold text-emerald-400">Greennit</a>
+      <a href="/" class="text-sm text-slate-300 hover:text-white">首页</a>
+      <a href="/topics" class="text-sm text-slate-300 hover:text-white">话题</a>
+      <a href="/forums" class="text-sm text-slate-300 hover:text-white">论坛</a>
+      <a href="/groups" class="text-sm text-slate-300 hover:text-white">群组</a>
     </div>
 
-    <!-- Center: Search (flex-grow) -->
-    <div class="flex-1 min-w-[160px] max-w-lg w-full sm:w-auto">
+    <div class="flex-1 px-4">
       <form action="/search" method="get" class="w-full">
-        <div class="flex items-center gap-2">
-          <input name="q" type="search" placeholder="搜索帖子、用户或话题..." value="{{ q if q is defined else '' }}" class="w-full text-sm px-3 py-2 rounded bg-slate-800 border border-slate-700 placeholder:text-slate-400" />
-          <button type="submit" class="hidden sm:inline px-3 py-1 rounded bg-slate-700 text-sm">搜索</button>
+        <div class="flex items-center">
+          <input name="q" type="search" placeholder="搜索帖子、用户或话题..." value="{{ q if q is defined else '' }}" class="w-full text-sm px-3 py-2 rounded bg-slate-700 border border-slate-600 placeholder:text-slate-400" />
         </div>
       </form>
     </div>
 
-    <!-- Right: User actions -->
-    <div class="flex items-center gap-2 flex-wrap justify-end">
+    <div class="flex items-center gap-3">
       {% if username %}
-        <span class="text-sm opacity-80 mr-2 hidden sm:inline">{{ username }}</span>
-
         <a href="/post/new" class="text-sm px-2 py-1 rounded bg-emerald-500 hover:bg-emerald-600">发帖</a>
-
-        <a href="/messages" class="text-sm px-2 py-1 rounded bg-slate-800 hover:bg-slate-700">
-          消息
-          {% if message_unread_count is defined and message_unread_count > 0 %}
-            <span class="ml-1 text-xs text-emerald-400">({{ message_unread_count }})</span>
-          {% endif %}
-        </a>
-
-        <a href="/notifications" class="text-sm px-2 py-1 rounded bg-slate-800 hover:bg-slate-700">
-          通知
-          {% if unread_count is defined and unread_count > 0 %}
-            <span class="ml-1 text-xs text-emerald-400">({{ unread_count }})</span>
-          {% endif %}
-        </a>
-
-        <a href="/settings" class="text-sm px-2 py-1 rounded bg-slate-800 hover:bg-slate-700">设置</a>
-
+        <a href="/messages" class="text-sm px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">消息{% if message_unread_count is defined and message_unread_count>0 %} <span class="text-amber-300">({{ message_unread_count }})</span>{% endif %}</a>
+        <a href="/notifications" class="text-sm px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">通知{% if unread_count is defined and unread_count>0 %} <span class="text-amber-300">({{ unread_count }})</span>{% endif %}</a>
+        <a href="/settings" class="text-sm px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">设置</a>
+        <a href="/user/{{ username }}" class="text-sm px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">{{ username }}</a>
         {% if is_admin %}
-        <details class="relative">
-          <summary class="list-none text-sm px-2 py-1 rounded bg-amber-500 hover:bg-amber-600 cursor-pointer">管理 ▾</summary>
-          <div class="absolute right-0 mt-2 w-44 bg-slate-800 rounded shadow p-2 space-y-1 z-50">
-            <a href="/admin/inbox" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">管理中心</a>
-            <a href="/admin/users" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">用户管理</a>
-            <a href="/admin/reports" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">举报</a>
-          </div>
-        </details>
+          <details class="relative">
+            <summary class="list-none text-sm px-2 py-1 rounded bg-amber-500 hover:bg-amber-600 cursor-pointer">管理 ▾</summary>
+            <div class="absolute right-0 mt-2 w-44 bg-slate-800 rounded shadow p-2 space-y-1 z-50">
+              <a href="/admin/inbox" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">管理中心</a>
+              <a href="/admin/users" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">用户管理</a>
+              <a href="/admin/reports" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">举报</a>
+              <a href="/admin/forum_requests" class="block text-sm px-2 py-1 rounded hover:bg-slate-700">论坛申请</a>
+            </div>
+          </details>
         {% endif %}
-
         <a href="/logout" class="text-sm px-2 py-1 rounded bg-slate-700 hover:bg-slate-600">退出</a>
       {% else %}
         <a href="/login" class="text-sm px-2 py-1 rounded bg-sky-500 hover:bg-sky-600">登录</a>
         <a href="/register" class="text-sm px-2 py-1 rounded bg-emerald-500 hover:bg-emerald-600">注册</a>
       {% endif %}
     </div>
-  </nav>
-</div>
+  </div>
+</nav>

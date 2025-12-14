@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>群组 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">我的群组</h1>
+    <a href="/groups/new" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+      创建群组
+    </a>
+  </div>
+
+  <div class="space-y-3">
+    {% if groups %}
+      {% for g in groups %}
+        <a href="/groups/{{ g.id }}" class="block bg-slate-800/80 rounded-xl p-4 hover:bg-slate-700/80">
+          <div class="flex justify-between items-start">
+            <div>
+              <div class="flex items-center gap-2 mb-1">
+                <span class="font-bold text-lg">{{ g.name }}</span>
+                {% if g.role == 'owner' %}
+                  <span class="text-xs px-2 py-0.5 rounded bg-amber-500 text-white">群主</span>
+                {% elif g.role == 'admin' %}
+                  <span class="text-xs px-2 py-0.5 rounded bg-sky-500 text-white">管理员</span>
+                {% endif %}
+              </div>
+              {% if g.description %}
+                <div class="text-sm text-slate-400 mb-2">{{ g.description }}</div>
+              {% endif %}
+              {% if g.last_message %}
+                <div class="text-sm text-slate-500">
+                  {{ g.last_message[0] }}: {{ g.last_message[1][:30] }}{% if g.last_message[1]|length > 30 %}...{% endif %}
+                </div>
+              {% else %}
+                <div class="text-sm text-slate-500">暂无消息</div>
+              {% endif %}
+            </div>
+            <div class="text-xs text-slate-500">
+              {{ g.member_count }} 成员
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    {% else %}
+      <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+        你还没有加入任何群组。<br>
+        <a href="/groups/new" class="text-emerald-400 hover:underline">创建一个群组</a>
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

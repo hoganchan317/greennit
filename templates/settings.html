@@ -43,6 +43,11 @@
           查看我的通知 →
         </a>
       </p>
+      <p>
+        <a href="/settings/sessions" class="block px-4 py-3 rounded bg-slate-800 hover:bg-slate-700">
+          🔐 会话管理 - 查看登录的设备
+        </a>
+      </p>
     </div>
   </section>
 
@@ -95,13 +100,21 @@
     </form>
   </section>
 
-  <!-- 危险操作（保留占位） -->
-  <section>
-    <h2 class="text-lg font-semibold mb-3">危险操作（以后可以加）</h2>
-    <div class="bg-slate-800/60 rounded-xl p-4 text-sm text-slate-400 space-y-2">
-      <p>将来你可以在这里加「删除账号」或「清空数据」等功能。</p>
+  <!-- 危险操作 -->
+  <div class="mt-8 pt-6 border-t border-slate-700">
+    <h2 class="text-lg font-bold text-red-500 mb-4">⚠️ 危险操作</h2>
+    <div class="bg-red-500/10 border border-red-500/30 rounded-xl p-4">
+      <div class="flex justify-between items-center">
+        <div>
+          <div class="font-medium">删除账号</div>
+          <div class="text-sm text-slate-400">永久删除你的账号和所有数据</div>
+        </div>
+        <a href="/settings/delete_account" class="px-4 py-2 rounded bg-red-500 hover:bg-red-600 text-sm">
+          删除账号
+        </a>
+      </div>
     </div>
-  </section>
+  </div>
 
 </div>
 </body>

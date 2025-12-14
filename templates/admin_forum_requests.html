@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>论坛创建申请 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <h1 class="text-2xl font-bold mb-6">论坛创建申请</h1>
+
+  <div class="space-y-4">
+    {% for r in pending_requests %}
+      <div class="p-4 bg-slate-800/80 rounded-xl">
+        <div class="flex justify-between items-start">
+          <div class="flex-1">
+            <div class="font-medium text-lg">{{ r[1] }}</div>
+            <div class="text-sm text-slate-400 mt-1">申请人：{{ r[6] }}</div>
+            <div class="text-sm text-slate-400">简介：{{ r[2] or '无' }}</div>
+            <div class="text-sm text-slate-400">理由：{{ r[3] or '无' }}</div>
+            <div class="text-xs text-slate-500 mt-2">{{ r[5].strftime('%Y-%m-%d %H:%M') if r[5] else '' }}</div>
+          </div>
+          <div class="flex gap-2">
+            <form method="post" action="/admin/forum_requests/{{ r[0] }}/approve">
+              <button type="submit" class="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 rounded text-sm">
+                批准
+              </button>
+            </form>
+            <form method="post" action="/admin/forum_requests/{{ r[0] }}/reject" class="flex gap-2">
+              <input name="reply" placeholder="拒绝理由（可选）" 
+                     class="px-2 py-1 bg-slate-900 border border-slate-700 rounded text-sm w-32">
+              <button type="submit" class="px-4 py-2 bg-red-500 hover:bg-red-600 rounded text-sm">
+                拒绝
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    {% else %}
+      <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+        暂无待处理的论坛申请。
+      </div>
+    {% endfor %}
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>

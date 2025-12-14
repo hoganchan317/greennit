@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <title>论坛 - Greennit</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>html{visibility:hidden}</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen">
+<div class="max-w-6xl mx-auto px-4 py-8">
+
+  {% include "_navbar.html" %}
+
+  <!-- 标题和按钮 -->
+  <div class="flex justify-between items-center mb-6">
+    <h1 class="text-2xl font-bold">论坛</h1>
+    <div class="flex gap-2">
+      <a href="/forums/join" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">
+        加入论坛
+      </a>
+      <a href="/forums/request" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
+        申请创建论坛
+      </a>
+    </div>
+  </div>
+
+  <!-- 我的论坛 -->
+  <h2 class="text-lg font-semibold mb-3">我的论坛</h2>
+  <div class="space-y-2 mb-8">
+    {% if my_forums %}
+      {% for f in my_forums %}
+        <a href="/forums/{{ f[0] }}" class="block p-4 bg-slate-800/80 rounded-xl hover:bg-slate-700/80">
+          <div class="flex justify-between items-center">
+            <div>
+              <div class="font-medium text-lg">{{ f[1] }}</div>
+              <div class="text-sm text-slate-400">{{ f[2] or '暂无简介' }}</div>
+            </div>
+            <div class="text-right">
+              <div class="text-sm text-slate-400">{{ f[5] }} 成员</div>
+              {% if f[4] == 'admin' %}
+                <span class="text-xs text-amber-400">管理员</span>
+              {% elif f[4] == 'moderator' %}
+                <span class="text-xs text-sky-400">版主</span>
+              {% endif %}
+            </div>
+          </div>
+        </a>
+      {% endfor %}
+    {% else %}
+      <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+        你还没有加入任何论坛。
+        <a href="/forums/join" class="text-emerald-400 hover:underline ml-1">加入一个</a>
+        或
+        <a href="/forums/request" class="text-emerald-400 hover:underline">申请创建</a>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- 公开论坛 -->
+  <h2 class="text-lg font-semibold mb-3">公开论坛</h2>
+  <div class="space-y-2">
+    {% if public_forums %}
+      {% for f in public_forums %}
+        <a href="/forums/{{ f[0] }}" class="block p-4 bg-slate-800/80 rounded-xl hover:bg-slate-700/80">
+          <div class="flex justify-between items-center">
+            <div>
+              <div class="font-medium text-lg">{{ f[1] }}</div>
+              <div class="text-sm text-slate-400">{{ f[2] or '暂无简介' }}</div>
+            </div>
+            <div class="text-sm text-slate-400">{{ f[3] }} 成员</div>
+          </div>
+        </a>
+      {% endfor %}
+    {% else %}
+      <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+        暂无公开论坛。
+      </div>
+    {% endif %}
+  </div>
+
+</div>
+<script>document.documentElement.style.visibility='visible'</script>
+</body>
+</html>
