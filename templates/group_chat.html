@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>{{ group.name }} - Greennit</title>
@@ -12,11 +12,11 @@
   {% include "_navbar.html" %}
 
   <div class="flex gap-6">
-    <!-- 左侧聊天区域 -->
+    <!-- Left: chat area -->
     <div class="flex-1">
       <div class="flex justify-between items-center mb-4">
         <div>
-          <a href="/groups" class="text-slate-400 hover:text-white text-sm">← 返回群组列表</a>
+          <a href="/groups" class="text-slate-400 hover:text-white text-sm">← Back to Groups</a>
           <h1 class="text-2xl font-bold flex items-center gap-2">
             {{ group.name }}
             <span id="onlineCount" class="text-sm text-emerald-400 font-normal"></span>
@@ -28,30 +28,30 @@
         <div class="flex gap-2">
           {% if role in ['owner', 'admin'] %}
             <a href="/groups/{{ group.id }}/invite" class="px-3 py-1 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
-              邀请成员
+              Invite members
             </a>
           {% endif %}
           {% if role != 'owner' %}
-            <form method="post" action="/groups/{{ group.id }}/leave" onsubmit="return confirm('确定要退出群组吗？')">
+            <form method="post" action="/groups/{{ group.id }}/leave" onsubmit="return confirm('Are you sure you want to leave the group?')">
               <button type="submit" class="px-3 py-1 rounded bg-red-500 hover:bg-red-600 text-sm">
-                退出群组
+                Leave group
               </button>
             </form>
           {% endif %}
         </div>
       </div>
 
-      <!-- 邀请码区域（仅群主和管理员可见） -->
+      <!-- Invite code area (owner/admin only) -->
       {% if role in ['owner', 'admin'] %}
         <div class="bg-slate-800/60 rounded-lg p-3 mb-4 flex justify-between items-center">
           <div>
-            <span class="text-slate-400 text-sm">邀请码：</span>
-            <span id="inviteCode" class="text-emerald-400 font-mono text-lg tracking-widest">{{ group.invite_code or '未生成' }}</span>
-            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">复制链接</button>
+            <span class="text-slate-400 text-sm">Invite code:</span>
+            <span id="inviteCode" class="text-emerald-400 font-mono text-lg tracking-widest">{{ group.invite_code or 'Not generated' }}</span>
+            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">Copy link</button>
           </div>
           {% if role == 'owner' %}
-            <form method="post" action="/groups/{{ group.id }}/regenerate_invite" onsubmit="return confirm('重置后旧邀请码将失效，确定吗？')">
-              <button type="submit" class="text-xs text-slate-400 hover:text-white">重置邀请码</button>
+            <form method="post" action="/groups/{{ group.id }}/regenerate_invite" onsubmit="return confirm('Resetting will invalidate the old invite code. Proceed?')">
+              <button type="submit" class="text-xs text-slate-400 hover:text-white">Regenerate invite code</button>
             </form>
           {% endif %}
         </div>
@@ -74,7 +74,7 @@
               </div>
             {% endfor %}
           {% else %}
-            <div class="text-center text-slate-400 py-6">暂无消息，开始聊天吧！</div>
+            <div class="text-center text-slate-400 py-6">No messages yet — start the conversation!</div>
           {% endif %}
         </div>
 
@@ -82,9 +82,9 @@
           <form id="messageForm" class="flex gap-2">
             <input id="messageInput" name="content" required
                    class="flex-1 rounded px-3 py-2 bg-slate-900 text-slate-100 border border-slate-700"
-                   placeholder="输入消息..." autocomplete="off">
+                   placeholder="Type a message..." autocomplete="off">
             <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">
-              发送
+              Send
             </button>
           </form>
         </div>
@@ -93,16 +93,16 @@
 
     <!-- 右侧成员列表 -->
     <div class="w-72 hidden lg:block">
-      <h2 class="text-lg font-bold mb-3">成员 ({{ members|length }})</h2>
+      <h2 class="text-lg font-bold mb-3">Members ({{ members|length }})</h2>
       <div class="bg-slate-800/80 rounded-xl p-3 space-y-2 max-h-[70vh] overflow-y-auto">
         {% for m in members %}
           <div class="flex justify-between items-center p-2 rounded hover:bg-slate-700/50">
             <div class="flex items-center gap-1">
               <a href="/user/{{ m.username }}" class="text-sm hover:underline">{{ m.username }}</a>
               {% if m.role == 'owner' %}
-                <span class="text-xs text-amber-400">群主</span>
+                <span class="text-xs text-amber-400">Owner</span>
               {% elif m.role == 'admin' %}
-                <span class="text-xs text-sky-400">管理</span>
+                <span class="text-xs text-sky-400">Admin</span>
               {% endif %}
               {% if m.is_muted %}
                 <span class="text-xs text-red-400">🔇</span>
@@ -113,16 +113,16 @@
                 {% if not m.is_muted %}
                   <form method="post" action="/groups/{{ group.id }}/mute/{{ m.username }}" class="inline">
                     <input type="hidden" name="duration" value="60">
-                    <button type="submit" class="text-xs text-amber-400 hover:text-amber-300" title="禁言1小时">🔇</button>
+                    <button type="submit" class="text-xs text-amber-400 hover:text-amber-300" title="Mute for 1 hour">🔇</button>
                   </form>
                 {% else %}
                   <form method="post" action="/groups/{{ group.id }}/unmute/{{ m.username }}" class="inline">
-                    <button type="submit" class="text-xs text-emerald-400 hover:text-emerald-300" title="解除禁言">🔊</button>
+                    <button type="submit" class="text-xs text-emerald-400 hover:text-emerald-300" title="Unmute">🔊</button>
                   </form>
                 {% endif %}
                 {% if role == 'owner' or (role == 'admin' and m.role == 'member') %}
-                  <form method="post" action="/groups/{{ group.id }}/kick/{{ m.username }}" onsubmit="return confirm('确定踢出这个成员吗？')">
-                    <button type="submit" class="text-xs text-red-400 hover:text-red-300">踢出</button>
+                  <form method="post" action="/groups/{{ group.id }}/kick/{{ m.username }}" onsubmit="return confirm('Are you sure you want to kick this member?')">
+                    <button type="submit" class="text-xs text-red-400 hover:text-red-300">Kick</button>
                   </form>
                 {% endif %}
               </div>
@@ -146,25 +146,25 @@ const messageForm = document.getElementById('messageForm');
 const messageInput = document.getElementById('messageInput');
 const onlineCountSpan = document.getElementById('onlineCount');
 
-// 滚动到底部
+// Scroll to bottom
 messagesDiv.scrollTop = messagesDiv.scrollHeight;
 
-// 复制邀请链接
+// Copy invite link
 function copyInviteLink() {
     const code = "{{ group.invite_code or '' }}";
     if (!code) {
-        alert('邀请码未生成');
-        return;
+      alert('Invite code not generated');
+      return;
     }
     const link = location.origin + '/groups/join?code=' + code;
     navigator.clipboard.writeText(link).then(function() {
-        alert('邀请链接已复制！');
+      alert('Invite link copied!');
     }).catch(function() {
-        prompt('复制此链接:', link);
+      prompt('Copy this link:', link);
     });
 }
 
-// WebSocket 连接
+  // WebSocket connection
 const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
 let ws;
 
@@ -172,7 +172,7 @@ function connectWebSocket() {
     ws = new WebSocket(wsProtocol + '//' + location.host + '/ws/group/' + groupId);
 
     ws.onopen = function() {
-        console.log('群聊 WebSocket 已连接');
+      console.log('Group chat WebSocket connected');
     };
 
     ws.onmessage = function(event) {
@@ -195,28 +195,28 @@ function connectWebSocket() {
             messagesDiv.appendChild(wrapper);
             messagesDiv.scrollTop = messagesDiv.scrollHeight;
         } else if (data.type === 'online_count') {
-            onlineCountSpan.textContent = '(' + data.count + ' 人在线)';
+          onlineCountSpan.textContent = '(' + data.count + ' online)';
         } else if (data.type === 'error') {
             alert(data.message);
         }
     };
 
     ws.onclose = function() {
-        console.log('群聊 WebSocket 已断开，3秒后重连...');
-        setTimeout(connectWebSocket, 3000);
+      console.log('Group chat WebSocket disconnected, reconnecting in 3s...');
+      setTimeout(connectWebSocket, 3000);
     };
 }
 
 connectWebSocket();
 
-// 转义 HTML
+// Escape HTML
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
 }
 
-// 发送消息
+// Send message
 messageForm.addEventListener('submit', function(e) {
     e.preventDefault();
     const content = messageInput.value.trim();
@@ -229,7 +229,7 @@ messageForm.addEventListener('submit', function(e) {
         }));
         messageInput.value = '';
     } else {
-        alert('连接已断开，请刷新页面重试');
+      alert('Connection closed, please refresh the page and try again');
     }
 });
 </script>

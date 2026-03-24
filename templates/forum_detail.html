@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <title>{{ forum.name }} - Greennit</title>
@@ -14,7 +14,7 @@
   <div class="flex gap-6">
     <!-- 左侧主内容 -->
     <div class="flex-1">
-      <a href="/forums" class="text-slate-400 hover:text-white text-sm">← 返回论坛列表</a>
+      <a href="/forums" class="text-slate-400 hover:text-white text-sm">← Back to Forums</a>
       
       <div class="flex justify-between items-start mt-2 mb-4">
         <div>
@@ -27,33 +27,33 @@
         <div class="flex gap-2">
           {% if role in ['admin', 'moderator'] %}
             <a href="/forums/{{ forum.id }}/new_post" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
-              发帖
+              New Post
             </a>
             <a href="/forums/{{ forum.id }}/members" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">
-              管理成员
+              Manage members
             </a>
           {% elif role == 'member' %}
             <a href="/forums/{{ forum.id }}/new_post" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
-              发帖
+              New Post
             </a>
           {% else %}
             <form method="post" action="/forums/join">
               <input type="hidden" name="code" value="{{ forum.invite_code }}">
               <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600 text-sm">
-                加入论坛
+                Join forum
               </button>
             </form>
           {% endif %}
         </div>
       </div>
 
-      <!-- 邀请码区域（仅管理员可见） -->
+      <!-- Invite code area (admin only) -->
       {% if role == 'admin' %}
         <div class="bg-slate-800/60 rounded-lg p-3 mb-4 flex justify-between items-center">
           <div>
-            <span class="text-slate-400 text-sm">邀请码：</span>
-            <span class="text-emerald-400 font-mono text-lg tracking-widest">{{ forum.invite_code or '未生成' }}</span>
-            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">复制链接</button>
+            <span class="text-slate-400 text-sm">Invite code:</span>
+            <span class="text-emerald-400 font-mono text-lg tracking-widest">{{ forum.invite_code or 'Not generated' }}</span>
+            <button onclick="copyInviteLink()" class="ml-2 text-xs text-sky-400 hover:underline">Copy link</button>
           </div>
         </div>
       {% endif %}
@@ -78,19 +78,19 @@
           {% if total_pages > 1 %}
             <div class="flex justify-center gap-2 mt-4">
               {% if page > 1 %}
-                <a href="/forums/{{ forum.id }}?page={{ page - 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">上一页</a>
+                <a href="/forums/{{ forum.id }}?page={{ page - 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">Previous</a>
               {% endif %}
-              <span class="px-3 py-1 text-slate-400 text-sm">{{ page }} / {{ total_pages }}</span>
+              <span class="px-3 py-1 text-slate-400 text-sm">Page {{ page }} of {{ total_pages }}</span>
               {% if page < total_pages %}
-                <a href="/forums/{{ forum.id }}?page={{ page + 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">下一页</a>
+                <a href="/forums/{{ forum.id }}?page={{ page + 1 }}" class="px-3 py-1 rounded bg-slate-700 hover:bg-slate-600 text-sm">Next</a>
               {% endif %}
             </div>
           {% endif %}
         {% else %}
-          <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
-            暂无帖子。
+            <div class="bg-slate-800/60 rounded-xl p-6 text-center text-slate-400">
+            No posts yet.
             {% if role %}
-              <a href="/forums/{{ forum.id }}/new_post" class="text-emerald-400 hover:underline ml-1">发布第一个帖子</a>
+              <a href="/forums/{{ forum.id }}/new_post" class="text-emerald-400 hover:underline ml-1">Create the first post</a>
             {% endif %}
           </div>
         {% endif %}

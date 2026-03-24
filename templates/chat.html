@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>与 {{ other_username }} 的对话 - Greennit</title>
+  <title>Conversation with {{ other_username }} - Greennit</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>html{visibility:hidden}</style>
   <style>
@@ -15,9 +15,9 @@
   {% include "_navbar.html" %}
 
   <div class="flex justify-between items-center mb-4">
-    <h1 class="text-2xl font-bold flex items-center gap-2">与 {{ other_username }} 的对话</h1>
+    <h1 class="text-2xl font-bold flex items-center gap-2">Conversation with {{ other_username }}</h1>
     <a href="/report/user/{{ other_username }}" class="text-xs px-3 py-1 rounded bg-slate-700 hover:bg-red-500 text-slate-300 hover:text-white">
-      举报用户
+      Report user
     </a>
   </div>
 
@@ -35,14 +35,14 @@
             </div>
           {% endfor %}
         {% else %}
-          <div class="text-center text-slate-400 py-6">暂无消息，开始聊天吧。</div>
+          <div class="text-center text-slate-400 py-6">No messages yet — start the conversation.</div>
         {% endif %}
       </div>
 
       <div class="mt-3">
         <form method="post" action="/messages/{{ other_username }}/send" id="sendForm" class="flex gap-2">
-          <input name="content" id="contentInput" class="flex-1 rounded px-3 py-2 bg-slate-900 text-slate-100 border border-slate-700" placeholder="输入消息..." autocomplete="off" />
-          <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">发送</button>
+          <input name="content" id="contentInput" class="flex-1 rounded px-3 py-2 bg-slate-900 text-slate-100 border border-slate-700" placeholder="Type a message..." autocomplete="off" />
+          <button type="submit" class="px-4 py-2 rounded bg-emerald-500 hover:bg-emerald-600">Send</button>
         </form>
       </div>
     </div>
@@ -51,7 +51,7 @@
 </div>
 
 <script>
-// 简单的 WebSocket 支持（如果后端存在 ws 路由）
+// Simple WebSocket support (if backend provides ws route)
 (function(){
   const username = "{{ username }}";
   const other = "{{ other_username }}";
@@ -78,7 +78,7 @@
     // Note: form submission is left to the server to insert messages.
     // We intentionally do NOT intercept the submit event here to avoid
     // duplicate messages being sent both via WebSocket and HTTP POST.
-  } catch(e) { console.warn('WebSocket 不可用', e); }
+  } catch(e) { console.warn('WebSocket unavailable', e); }
 })();
 </script>
 <script>document.documentElement.style.visibility='visible'</script>

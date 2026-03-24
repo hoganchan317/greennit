@@ -1,27 +1,27 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>用户管理 - Greennit</title>
+  <title>User Management - Greennit</title>
   <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-slate-900 text-slate-100 min-h-screen">
   <div class="max-w-6xl mx-auto px-4 py-8">
     <div class="flex justify-between items-center mb-6">
-      <a href="/" class="text-slate-400 text-sm">&larr; 返回首页</a>
+      <a href="/" class="text-slate-400 text-sm">&larr; Back to Home</a>
       <div class="text-sm opacity-80">管理员：{{ username }}</div>
     </div>
 
-    <h1 class="text-2xl font-bold mb-4">用户管理</h1>
+    <h1 class="text-2xl font-bold mb-4">User Management</h1>
 
     <table class="w-full text-sm bg-slate-800/80 rounded-xl overflow-hidden">
       <thead class="bg-slate-700/80">
         <tr>
           <th class="px-4 py-2 text-left">ID</th>
-          <th class="px-4 py-2 text-left">用户名</th>
-          <th class="px-4 py-2 text-left">角色</th>
-          <th class="px-4 py-2 text-left">状态</th>
-          <th class="px-4 py-2 text-left">操作</th>
+          <th class="px-4 py-2 text-left">Username</th>
+          <th class="px-4 py-2 text-left">Role</th>
+          <th class="px-4 py-2 text-left">Status</th>
+          <th class="px-4 py-2 text-left">Actions</th>
         </tr>
       </thead>
       <tbody>
@@ -30,15 +30,15 @@
             <td class="px-4 py-2">{{ u[0] }}</td>
             <td class="px-4 py-2">{{ u[1] }}</td>
             <td class="px-4 py-2">
-              {% if u[2] == 1 %}<span class="text-amber-300">管理员</span>{% else %}普通用户{% endif %}
+              {% if u[2] == 1 %}<span class="text-amber-300">Admin</span>{% else %}Regular user{% endif %}
             </td>
             <td class="px-4 py-2">
-              {% if u[3] == 1 %}<span class="text-red-400">已封禁</span>{% else %}<span class="text-emerald-400">正常</span>{% endif %}
+              {% if u[3] == 1 %}<span class="text-red-400">Banned</span>{% else %}<span class="text-emerald-400">Active</span>{% endif %}
             </td>
             <td class="px-4 py-2">
               {% if u[2] == 1 %}
-                <!-- 管理员自己或其他管理员，不允许封禁 -->
-                <span class="text-slate-500 text-xs">不可操作</span>
+                <!-- Admins (self or other admins) cannot be banned -->
+                <span class="text-slate-500 text-xs">Not available</span>
               {% else %}
                 <form method="post" action="/admin/user/{{ u[0] }}/ban">
                   <button class="px-3 py-1 rounded text-xs
@@ -47,7 +47,7 @@
                                  {% else %}
                                    bg-red-500/70 hover:bg-red-500
                                  {% endif %}">
-                    {% if u[3] == 1 %}解封{% else %}封禁{% endif %}
+                    {% if u[3] == 1 %}Unban{% else %}Ban{% endif %}
                   </button>
                 </form>
               {% endif %}

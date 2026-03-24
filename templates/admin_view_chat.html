@@ -1,8 +1,8 @@
 <!DOCTYPE html>
-<html lang="zh">
+<html lang="en">
 <head>
   <meta charset="utf-8">
-  <title>查看聊天记录 - Greennit</title>
+  <title>View Chat Logs - Greennit</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>html{visibility:hidden}</style>
 </head>
@@ -12,15 +12,15 @@
   {% include "_navbar.html" %}
 
   <div class="flex items-center gap-4 mb-4">
-    <a href="/admin/reports" class="text-slate-400 hover:text-white">← 返回举报管理</a>
-    <h1 class="text-2xl font-bold">聊天记录审查</h1>
+    <a href="/admin/reports" class="text-slate-400 hover:text-white">← Back to Reports</a>
+    <h1 class="text-2xl font-bold">Chat Log Review</h1>
   </div>
 
   <div class="bg-slate-800/80 rounded-xl p-4 mb-4">
     <div class="flex gap-4 text-sm">
       <span>用户 1: <a href="/user/{{ user1 }}" class="text-sky-400 hover:underline">{{ user1 }}</a></span>
       <span>用户 2: <a href="/user/{{ user2 }}" class="text-sky-400 hover:underline">{{ user2 }}</a></span>
-      <span class="text-slate-400">共 {{ messages|length }} 条消息</span>
+      <span class="text-slate-400">Total {{ messages|length }} messages</span>
     </div>
   </div>
 
@@ -44,15 +44,15 @@
           </div>
         {% endfor %}
       {% else %}
-        <div class="text-center text-slate-400 py-6">这两位用户之间没有聊天记录。</div>
+        <div class="text-center text-slate-400 py-6">There are no chat messages between these two users.</div>
       {% endif %}
     </div>
   </div>
 
   <div class="mt-4 flex gap-3">
-    <a href="/admin/users" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">用户管理</a>
-    <a href="/user/{{ user1 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">查看 {{ user1 }} 资料</a>
-    <a href="/user/{{ user2 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">查看 {{ user2 }} 资料</a>
+    <a href="/admin/users" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">User Management</a>
+    <a href="/user/{{ user1 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">View {{ user1 }} profile</a>
+    <a href="/user/{{ user2 }}" class="px-4 py-2 rounded bg-slate-700 hover:bg-slate-600 text-sm">View {{ user2 }} profile</a>
   </div>
 
 </div>
