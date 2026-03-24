@@ -52,7 +52,8 @@ async def check_session_middleware(request: Request, call_next):
 
     return await call_next(request)
 
-pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+# Prefer bcrypt for new hashes but keep pbkdf2_sha256 for compatibility with existing hashes.
+pwd_context = CryptContext(schemes=["bcrypt", "pbkdf2_sha256"], deprecated="auto")
 SECRET_KEY = "this_is_a_super_secret_key_change_me"
 ALGORITHM = "HS256"
 
@@ -2602,8 +2603,9 @@ async def change_password(
         if new_password != new_password2:
             return render_error(request, "两次输入的新密码不一致。", back_url="/settings", status_code=400)
 
-        if len(new_password) < 6:
-            return render_error(request, "新密码太短，至少 6 位。", back_url="/settings", status_code=400)
+        # Enforce minimum password length of 8 characters
+        if len(new_password) < 8:
+            return render_error(request, "新密码太短，至少 8 位。", back_url="/settings", status_code=400)
 
         # 更新密码
         new_hashed = pwd_context.hash(new_password)
@@ -3695,6 +3697,11 @@ async def register(request: Request, username: str = Form(), password: str = For
     if len(password) > 50:
         return render_error(request, "密码太长啦，请不要超过 50 个字符。", back_url="/register", status_code=400)
 
+    # Enforce a simple password rule: minimum 8 characters
+    if len(password) < 8:
+        return render_error(request, "密码太短，至少 8 位。", back_url="/register", status_code=400)
+
+    # Hash password with the configured CryptContext (bcrypt preferred)
     hashed = pwd_context.hash(password)
     try:
         with get_db_conn() as conn:
